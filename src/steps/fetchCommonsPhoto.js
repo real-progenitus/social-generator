@@ -8,10 +8,31 @@ const REQUEST_WIDTH = 1600;
 // license string anyway rather than trust that blindly.
 const PERMISSIVE_LICENSE = /^(cc0|cc[\s-]?by|public domain|pd\b)/i;
 
+// Commons tags "of the subject" liberally — album art, memorials, and logos
+// all turn up in a plain name search. None of those work as a cover photo:
+// album art has its own text/branding baked in, memorials/graves are a bad
+// tone match, and logos aren't photos at all. Filtered on title/description/
+// categories rather than pixel content — cheap and catches the vast majority
+// of Commons' own labeling for these.
+const EXCLUDE_PATTERN =
+  /\b(cover|album cover|single cover|logo|logotype|wordmark|emblem|coat of arms|grave|gravestone|headstone|tombstone|memorial|gedenkst\w*|cemetery|graveyard|monument|plaque|poster|flyer|ticket|screenshot|banknote|postage stamp)\b/i;
+
 function stripHtml(html) {
   return String(html ?? "")
     .replace(/<[^>]*>/g, "")
     .trim();
+}
+
+function looksExcluded(page, info) {
+  const text = [
+    page.title,
+    info.extmetadata?.ObjectName?.value,
+    info.extmetadata?.ImageDescription?.value,
+    info.extmetadata?.Categories?.value,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return EXCLUDE_PATTERN.test(text);
 }
 
 function pickBestImage(pages, usedUrls) {
@@ -26,6 +47,7 @@ function pickBestImage(pages, usedUrls) {
     if (!PERMISSIVE_LICENSE.test(license)) continue;
 
     if (usedUrls.has(info.descriptionurl)) continue;
+    if (looksExcluded(page, info)) continue;
 
     const credit =
       stripHtml(info.extmetadata?.Artist?.value) ||
