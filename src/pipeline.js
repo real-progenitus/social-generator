@@ -8,24 +8,18 @@ import { publishPost } from "./steps/publish.js";
 import { renderSlides } from "./steps/renderSlides.js";
 import { sendForReview } from "./steps/review.js";
 
-const MAX_FACT_ATTEMPTS = 3;
-
+// One generation + one check, no regeneration loop — factCheck calls are the
+// expensive part, so generateFact's prompt is responsible for only proposing
+// easy-to-verify facts in the first place.
 async function generateVerifiedFact() {
-  let lastIssues = [];
-  for (let attempt = 1; attempt <= MAX_FACT_ATTEMPTS; attempt++) {
-    const fact = await generateFact();
-    console.log(`[pipeline] attempt ${attempt}: "${fact.headline}"`);
-    const check = await factCheck(fact);
-    if (check.verdict === "pass" && check.confidence !== "low") {
-      return { fact, check };
-    }
-    lastIssues = check.issues;
-    console.warn(
-      `[pipeline] fact check ${check.verdict} (${check.confidence}): ${check.issues.join("; ")} — regenerating`,
-    );
+  const fact = await generateFact();
+  console.log(`[pipeline] generated: "${fact.headline}"`);
+  const check = await factCheck(fact);
+  if (check.verdict === "pass" && check.confidence !== "low") {
+    return { fact, check };
   }
   throw new Error(
-    `No fact passed verification after ${MAX_FACT_ATTEMPTS} attempts. Last issues: ${lastIssues.join("; ")}`,
+    `Fact failed verification (${check.verdict}, confidence ${check.confidence}): ${check.issues.join("; ")}`,
   );
 }
 
@@ -35,7 +29,11 @@ async function generateVerifiedFact() {
  * -> queue_for_review (or publish directly when REVIEW_REQUIRED=false)
  */
 export async function runPipeline() {
-  if (!config.mockMode) requireConfig(["anthropicApiKey", "xaiApiKey"]);
+  if (!config.mockMode) {
+    const required = ["anthropicApiKey"];
+    if (!config.localCoverImage) required.push("xaiApiKey");
+    requireConfig(required);
+  }
 
   const { fact, check } = await generateVerifiedFact();
 
@@ -50,17 +48,21 @@ export async function runPipeline() {
   const outDir = path.join(config.outputDir, `post-${postId}`);
   const cover = await generateCover(fact, outDir);
   const slidePaths = await renderSlides(fact, cover, outDir);
+  // Commons photos require attribution (CC BY / CC BY-SA) — fold it into the
+  // caption so it ships with the post rather than only living in logs.
+  const caption = cover.attribution ? `${fact.caption}\n\n${cover.attribution}` : fact.caption;
   updatePost(postId, {
     status: "rendered",
     cover_path: cover.path,
     slide_paths_json: JSON.stringify(slidePaths),
+    caption,
   });
   console.log(`[pipeline] post #${postId} rendered: ${slidePaths.length} slides in ${outDir}`);
 
   if (config.reviewRequired) {
     requireConfig(["telegramBotToken", "telegramChatId"]);
     updatePost(postId, { status: "pending_review" });
-    await sendForReview(postId, fact, slidePaths);
+    await sendForReview(postId, { ...fact, caption }, slidePaths);
     console.log(
       `[pipeline] post #${postId} awaiting approval — run \`npm run poll\` to process the decision`,
     );

@@ -6,6 +6,8 @@ import { config } from "../config.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const templatePath = path.join(here, "..", "..", "templates", "slide.html");
+const logoPath = path.join(here, "..", "..", "assets", "logo.png");
+const logoUri = `data:image/png;base64,${fs.readFileSync(logoPath).toString("base64")}`;
 
 const WIDTH = 1080;
 const HEIGHT = 1350;
@@ -34,19 +36,24 @@ function coverHtml(fact, coverImage) {
 
 function bodyHtml(fact, index, total) {
   const isLast = index === total - 1;
-  const dots = Array.from(
-    { length: total },
-    (_, i) => `<span class="dot${i === index ? " active" : ""}"></span>`,
-  ).join("");
+  const num = String(index + 1).padStart(2, "0");
   return `
   <div class="body-slide">
-    <div class="slide-num">${String(index + 1).padStart(2, "0")} <span class="total">/ ${String(total).padStart(2, "0")}</span></div>
-    <div class="body-text">${esc(fact.slides[index - 1])}</div>
-    ${isLast ? `<div class="source">Source: ${esc(fact.source_note)}</div>` : ""}
-    <div class="footer">
-      <span>${esc(config.postHandle)}</span>
-      <div class="dots">${dots}</div>
+    <div class="ring ring-outer"></div>
+    <div class="ring ring-inner"></div>
+    <div class="ring ring-bl"></div>
+    <div class="card">
+      <div class="ghost-num">${num}</div>
+      <div class="top-row">
+        <span class="kicker">Electronic Music Facts</span>
+        <div class="slide-num">${num} <span class="total">/ ${String(total).padStart(2, "0")}</span></div>
+      </div>
+      <div class="body-text-wrap">
+        <div class="body-text">${esc(fact.slides[index - 1])}</div>
+      </div>
+      ${isLast ? `<div class="source">Source: ${esc(fact.source_note)}</div>` : ""}
     </div>
+    <div class="footer"><img class="footer-logo" src="${logoUri}" alt=""><span>${esc(config.postHandle)}</span></div>
   </div>`;
 }
 

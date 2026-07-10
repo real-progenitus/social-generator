@@ -1,42 +1,81 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
+import { fetchCommonsPhoto } from "./fetchCommonsPhoto.js";
 
 const XAI_IMAGES_URL = "https://api.x.ai/v1/images/generations";
+
+const MIME_BY_EXT = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".gif": "image/gif",
+};
+
+function localCover(imagePath, outDir) {
+  const ext = path.extname(imagePath).toLowerCase();
+  const mime = MIME_BY_EXT[ext];
+  if (!mime) {
+    throw new Error(
+      `LOCAL_COVER_IMAGE has unrecognized extension "${ext}" — use one of: ${Object.keys(MIME_BY_EXT).join(", ")}`,
+    );
+  }
+  if (!fs.existsSync(imagePath)) {
+    throw new Error(`LOCAL_COVER_IMAGE not found: ${imagePath}`);
+  }
+  const file = path.join(outDir, `cover-raw${ext}`);
+  fs.copyFileSync(imagePath, file);
+  return { path: file, mime };
+}
+
+async function downloadCommonsPhoto(photo, outDir) {
+  const res = await fetch(photo.url);
+  if (!res.ok) throw new Error(`Failed to download Commons photo: ${res.status}`);
+  const ext = photo.mime === "image/png" ? ".png" : ".jpg";
+  const file = path.join(outDir, `cover-raw${ext}`);
+  fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+  return {
+    path: file,
+    mime: photo.mime,
+    attribution: `Photo: ${photo.credit} / Wikimedia Commons (${photo.license})`,
+  };
+}
+
+// Kept deliberately plain: no "neon," "abstract composition," "waveforms," or
+// illustrated-silhouette language — that vocabulary is what makes these read
+// as obvious AI art. Ask for something a photographer could have shot.
+const NO_AI_LOOK =
+  "Realistic photograph, not digital art or illustration. No text, no logos, no illustrated or " +
+  "cartoon elements, no overlaid graphics, waveforms, or sound-wave visuals. Portrait orientation, " +
+  "natural lighting, shot on a professional camera.";
 
 function buildPrompt(fact) {
   if (fact.fact_type === "artist_specific" && fact.artist_name) {
     if (config.artistImageMode === "photoreal") {
       // Explicit opt-in only — see README §2.2 for the legal/platform risk.
       return (
-        `Portrait-format editorial photograph evoking the world of ${fact.artist_name}: ` +
-        `stage, gear and atmosphere associated with their era of electronic music. ` +
-        `Moody club lighting, cinematic, high detail. Theme: ${fact.topic}.`
+        `Editorial photograph evoking the world of ${fact.artist_name}: stage, gear, and atmosphere ` +
+        `from their era of electronic music. Theme: ${fact.topic}. ${NO_AI_LOOK}`
       );
     }
     return (
-      `Stylized poster-art illustration inspired by the music of ${fact.artist_name} — ` +
-      `NOT a realistic likeness or photograph of any person. Abstract silhouette, bold ` +
-      `screen-print / pop-art treatment, symbolic imagery of their era and gear ` +
-      `(synthesizers, turntables, club lights). Dark background, neon accents, ` +
-      `portrait orientation. Theme: ${fact.topic}.`
+      `Photograph of the gear, stage, and atmosphere associated with ${fact.artist_name}'s era of ` +
+      `electronic music: synthesizers, mixing decks, turntables, or an empty stage or venue. ` +
+      `No people, no faces, no human figures or silhouettes. Theme: ${fact.topic}. ${NO_AI_LOOK}`
     );
   }
-  return (
-    `Atmospheric electronic music visual: ${fact.topic}. Abstract composition — ` +
-    `club lighting beams, waveforms, synthesizer close-up textures, crowd silhouettes. ` +
-    `Dark background with vivid neon accents, cinematic haze, portrait orientation, ` +
-    `no text, no readable words.`
-  );
+  return `Photograph representing: ${fact.topic}. An authentic club, festival, or studio environment. ${NO_AI_LOOK}`;
 }
 
 function mockCover(outDir) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350" viewBox="0 0 1080 1350">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0d0221"/>
-      <stop offset="0.55" stop-color="#1a0b3b"/>
-      <stop offset="1" stop-color="#03121f"/>
+      <stop offset="0" stop-color="#1a1e2e"/>
+      <stop offset="0.55" stop-color="#14172380"/>
+      <stop offset="1" stop-color="#0d0f1a"/>
     </linearGradient>
   </defs>
   <rect width="1080" height="1350" fill="url(#bg)"/>
@@ -44,10 +83,10 @@ function mockCover(outDir) {
     const x = 40 + i * 19;
     const h = 120 + Math.abs(Math.sin(i * 0.7)) * 420;
     const y = 675 - h / 2;
-    return `<rect x="${x}" y="${y.toFixed(0)}" width="9" height="${h.toFixed(0)}" rx="4" fill="#b9ff2e" opacity="${(0.25 + 0.55 * Math.abs(Math.cos(i * 0.45))).toFixed(2)}"/>`;
+    return `<rect x="${x}" y="${y.toFixed(0)}" width="9" height="${h.toFixed(0)}" rx="4" fill="#ffffff" opacity="${(0.18 + 0.4 * Math.abs(Math.cos(i * 0.45))).toFixed(2)}"/>`;
   }).join("\n  ")}
-  <circle cx="850" cy="280" r="180" fill="none" stroke="#ff2ea6" stroke-width="3" opacity="0.5"/>
-  <circle cx="850" cy="280" r="120" fill="none" stroke="#2ee6ff" stroke-width="2" opacity="0.6"/>
+  <circle cx="850" cy="280" r="180" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.35"/>
+  <circle cx="850" cy="280" r="120" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.5"/>
 </svg>`;
   const file = path.join(outDir, "cover-raw.svg");
   fs.writeFileSync(file, svg);
@@ -55,11 +94,35 @@ function mockCover(outDir) {
 }
 
 /**
- * Generate the cover artwork via the xAI (Grok) image API.
- * Returns { path, mime } of the raw image; the renderer overlays the headline.
+ * Generate the cover artwork. Tries a real, freely-licensed photo of the
+ * fact's subject (artist, venue, or festival) from Wikimedia Commons first —
+ * more authentic than AI art, and sidesteps generating a likeness of a real
+ * person. Falls back to the xAI (Grok) image API otherwise or on any error.
+ * Returns { path, mime, attribution? } of the raw image; the renderer
+ * overlays the headline.
  */
 export async function generateCover(fact, outDir) {
   fs.mkdirSync(outDir, { recursive: true });
+
+  if (config.localCoverImage) {
+    console.log(`[generateCover] LOCAL_COVER_IMAGE — using ${config.localCoverImage}`);
+    return localCover(config.localCoverImage, outDir);
+  }
+
+  const photoSubject =
+    fact.image_subject || (fact.fact_type === "artist_specific" ? fact.artist_name : null);
+  if (!config.mockMode && photoSubject) {
+    try {
+      const photo = await fetchCommonsPhoto(photoSubject);
+      if (photo) {
+        console.log(`[generateCover] using Wikimedia Commons photo of "${photoSubject}" (${photo.license})`);
+        return await downloadCommonsPhoto(photo, outDir);
+      }
+      console.log(`[generateCover] no suitable Commons photo for "${photoSubject}" — falling back to AI generation`);
+    } catch (err) {
+      console.warn(`[generateCover] Commons photo lookup failed (${err.message}) — falling back to AI generation`);
+    }
+  }
 
   if (config.mockMode) {
     console.log("[generateCover] MOCK_MODE — generating placeholder SVG cover");

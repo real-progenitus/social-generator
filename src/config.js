@@ -13,6 +13,11 @@ export const config = {
   xaiApiKey: process.env.XAI_API_KEY ?? "",
   grokImageModel: process.env.GROK_IMAGE_MODEL ?? "grok-2-image",
 
+  // Path to a local image file — when set, generateCover uses it verbatim
+  // instead of calling the xAI Grok API. For testing the render/review/
+  // publish steps without burning a Grok credit each run.
+  localCoverImage: process.env.LOCAL_COVER_IMAGE ?? "",
+
   // "stylized" | "photoreal" — stylized by default; photoreal likeness of real
   // musicians carries right-of-publicity and Meta policy risk (see README §2.2)
   artistImageMode:
