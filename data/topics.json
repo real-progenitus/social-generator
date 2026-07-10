@@ -23,6 +23,11 @@
     { "topic": "Fred again..'s surprise Boiler Room and Glastonbury sets", "kind": "performance_moment" },
     { "topic": "Four Tet, Fred again.. and Skrillex's joint arena tour", "kind": "performance_moment" },
     { "topic": "Boris Brejcha's masked high-tech minimal techno sets at major festivals", "kind": "performance_moment" },
+    { "topic": "ARTBAT's cinematic mainstage productions at Tomorrowland and Untold", "kind": "performance_moment" },
+    { "topic": "Amelie Lens' marathon techno sets and Exhale label showcases", "kind": "performance_moment" },
+    { "topic": "Ben Böhmer's live band-and-DJ hybrid sets blending melodic techno with real instrumentation", "kind": "performance_moment" },
+    { "topic": "Adriatique's sunrise closing sets for the Afterlife collective", "kind": "performance_moment" },
+    { "topic": "Loco Dice's all-night Desolat sets bridging house and techno", "kind": "performance_moment" },
 
     { "topic": "Auto-Tune's invention and the backlash after Cher's 'Believe'", "kind": "controversial_innovation" },
     { "topic": "The Roland TR-808's rejection by musicians before it defined hip-hop and dance music", "kind": "controversial_innovation" },
@@ -39,6 +44,8 @@
     { "topic": "The vinyl-to-CDJ transition backlash among DJ purists", "kind": "controversial_innovation" },
     { "topic": "Festival lineup gender-imbalance controversies in dance music", "kind": "controversial_innovation" },
     { "topic": "Algorithmic and AI-driven DJ mixing tools sparking debate among club DJs", "kind": "controversial_innovation" },
+    { "topic": "Melodic techno's 'Spotify-core' backlash and debates over festival-mainstage homogenization", "kind": "controversial_innovation" },
+    { "topic": "UK bassline and speed garage's underground revival and sample-clearance disputes", "kind": "controversial_innovation" },
 
     { "topic": "The Second Summer of Love and the 1988 UK acid house explosion", "kind": "culture_defining_moment" },
     { "topic": "The fall of the Berlin Wall and the birth of Berlin's techno scene", "kind": "culture_defining_moment" },
@@ -63,6 +70,12 @@
     { "topic": "Burning Man's Black Rock City sound camps and their influence on dance music culture", "kind": "culture_defining_moment" },
     { "topic": "Boom Festival and Portugal's psytrance pilgrimage", "kind": "culture_defining_moment" },
     { "topic": "Universo Paralelo and Brazil's psytrance festival scene", "kind": "culture_defining_moment" },
+    { "topic": "Kappa Futur Festival and Turin's rise as an Italian techno capital", "kind": "culture_defining_moment" },
+    { "topic": "Awakenings and the Netherlands' festival-scale techno scene", "kind": "culture_defining_moment" },
+    { "topic": "Amsterdam Dance Event (ADE) as electronic music's biggest industry gathering", "kind": "culture_defining_moment" },
+    { "topic": "Circoloco's DC10 Ibiza parties and their cult underground following", "kind": "culture_defining_moment" },
+    { "topic": "Afterlife and the rise of melodic techno as a festival mainstage sound", "kind": "culture_defining_moment" },
+    { "topic": "Time Warp's growth from a Mannheim warehouse party into a global techno brand", "kind": "culture_defining_moment" },
 
     { "topic": "Daft Punk", "kind": "artist_trivia" },
     { "topic": "Kraftwerk", "kind": "artist_trivia" },
@@ -100,6 +113,17 @@
     { "topic": "Ace Ventura (Itzik Levy) and psytrance's global reach", "kind": "artist_trivia" },
     { "topic": "Ben UFO and Hessle Audio", "kind": "artist_trivia" },
     { "topic": "WhoMadeWho", "kind": "artist_trivia" },
-    { "topic": "Keinemusik, the Berlin collective behind it (&ME, Rampa, Adam Port)", "kind": "artist_trivia" }
+    { "topic": "Keinemusik, the Berlin collective behind it (&ME, Rampa, Adam Port)", "kind": "artist_trivia" },
+    { "topic": "Oscar Mulero and Spain's underground techno scene", "kind": "artist_trivia" },
+    { "topic": "Lilly Palmer's rise through Europe's techno underground", "kind": "artist_trivia" },
+    { "topic": "Eli Brown and the new wave of UK tech house", "kind": "artist_trivia" },
+    { "topic": "Amelie Lens and the Exhale label", "kind": "artist_trivia" },
+    { "topic": "Indira Paganotto and her psytrance-tinged techno sound", "kind": "artist_trivia" },
+    { "topic": "ARTBAT, the Ukrainian duo behind electronic music's biggest melodic techno anthems", "kind": "artist_trivia" },
+    { "topic": "Adriatique and the Afterlife label", "kind": "artist_trivia" },
+    { "topic": "Sammy Virji and the UK bassline and garage revival", "kind": "artist_trivia" },
+    { "topic": "Oppidan and the new generation of UK garage-influenced producers", "kind": "artist_trivia" },
+    { "topic": "Ben Böhmer's journey from bedroom producer to melodic techno headliner", "kind": "artist_trivia" },
+    { "topic": "Loco Dice and the Desolat label", "kind": "artist_trivia" }
   ]
 }
