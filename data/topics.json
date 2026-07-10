@@ -28,6 +28,9 @@
     { "topic": "Ben Böhmer's live band-and-DJ hybrid sets blending melodic techno with real instrumentation", "kind": "performance_moment" },
     { "topic": "Adriatique's sunrise closing sets for the Afterlife collective", "kind": "performance_moment" },
     { "topic": "Loco Dice's all-night Desolat sets bridging house and techno", "kind": "performance_moment" },
+    { "topic": "Solomun's marathon 'Solomun +1' residency sets at Pacha Ibiza", "kind": "performance_moment" },
+    { "topic": "Eric Prydz's HOLO hologram stage production", "kind": "performance_moment" },
+    { "topic": "Armin van Buuren's arena-scale A State of Trance spectacles", "kind": "performance_moment" },
 
     { "topic": "Auto-Tune's invention and the backlash after Cher's 'Believe'", "kind": "controversial_innovation" },
     { "topic": "The Roland TR-808's rejection by musicians before it defined hip-hop and dance music", "kind": "controversial_innovation" },
@@ -46,6 +49,12 @@
     { "topic": "Algorithmic and AI-driven DJ mixing tools sparking debate among club DJs", "kind": "controversial_innovation" },
     { "topic": "Melodic techno's 'Spotify-core' backlash and debates over festival-mainstage homogenization", "kind": "controversial_innovation" },
     { "topic": "UK bassline and speed garage's underground revival and sample-clearance disputes", "kind": "controversial_innovation" },
+    { "topic": "Anonymous masked DJ personas like Claptone and the debate over branding versus artistry", "kind": "controversial_innovation" },
+    { "topic": "The overnight TikTok-fame DJ boom and scene veterans' backlash over 'paying your dues'", "kind": "controversial_innovation" },
+    { "topic": "Stem-separation and AI mashup tools reigniting authenticity debates in DJ sets", "kind": "controversial_innovation" },
+    { "topic": "The NFT and Web3 hype cycle among electronic artists and its rapid collapse", "kind": "controversial_innovation" },
+    { "topic": "Cultural-appropriation debates around Afro house's global commercial rise", "kind": "controversial_innovation" },
+    { "topic": "Dynamic ticket pricing and resale-bot controversies at major electronic festivals", "kind": "controversial_innovation" },
 
     { "topic": "The Second Summer of Love and the 1988 UK acid house explosion", "kind": "culture_defining_moment" },
     { "topic": "The fall of the Berlin Wall and the birth of Berlin's techno scene", "kind": "culture_defining_moment" },
@@ -76,6 +85,8 @@
     { "topic": "Circoloco's DC10 Ibiza parties and their cult underground following", "kind": "culture_defining_moment" },
     { "topic": "Afterlife and the rise of melodic techno as a festival mainstage sound", "kind": "culture_defining_moment" },
     { "topic": "Time Warp's growth from a Mannheim warehouse party into a global techno brand", "kind": "culture_defining_moment" },
+    { "topic": "Black Coffee and Afro house's crossover into mainstream global dance music", "kind": "culture_defining_moment" },
+    { "topic": "Diynamic's poolside parties and Pag Island's rise as a house-music destination", "kind": "culture_defining_moment" },
 
     { "topic": "Daft Punk", "kind": "artist_trivia" },
     { "topic": "Kraftwerk", "kind": "artist_trivia" },
@@ -124,6 +135,16 @@
     { "topic": "Sammy Virji and the UK bassline and garage revival", "kind": "artist_trivia" },
     { "topic": "Oppidan and the new generation of UK garage-influenced producers", "kind": "artist_trivia" },
     { "topic": "Ben Böhmer's journey from bedroom producer to melodic techno headliner", "kind": "artist_trivia" },
-    { "topic": "Loco Dice and the Desolat label", "kind": "artist_trivia" }
+    { "topic": "Loco Dice and the Desolat label", "kind": "artist_trivia" },
+    { "topic": "Solomun and the Diynamic label", "kind": "artist_trivia" },
+    { "topic": "Claptone and his golden bird-mask persona", "kind": "artist_trivia" },
+    { "topic": "Black Coffee's rise from South Africa to Grammy-winning global star", "kind": "artist_trivia" },
+    { "topic": "Peggy Gou's rise from Berlin's underground to global pop crossover", "kind": "artist_trivia" },
+    { "topic": "Tale Of Us and the Afterlife label they co-founded", "kind": "artist_trivia" },
+    { "topic": "Eric Prydz and his Pryda and Cirez D aliases", "kind": "artist_trivia" },
+    { "topic": "Dixon and the Innervisions label", "kind": "artist_trivia" },
+    { "topic": "Armin van Buuren and A State of Trance", "kind": "artist_trivia" },
+    { "topic": "John Summit's rise from bedroom producer to festival headliner", "kind": "artist_trivia" },
+    { "topic": "Vintage Culture and Brazil's global house music breakthrough", "kind": "artist_trivia" }
   ]
 }
