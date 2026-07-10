@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { db } from "./db.js";
-import { runPipeline } from "./pipeline.js";
+import { runBatch, runPipeline } from "./pipeline.js";
 import { serveMedia } from "./serve.js";
 import { runAnalytics } from "./steps/analytics.js";
 import { publishPost } from "./steps/publish.js";
@@ -10,7 +10,8 @@ const [command, arg] = process.argv.slice(2);
 
 const USAGE = `Usage: node src/cli.js <command>
 
-  run              Run the daily pipeline (fact -> check -> cover -> render -> review/publish)
+  run              Run the daily pipeline once (fact -> check -> cover -> render -> review/publish)
+  run-batch [n]    Run the pipeline n times back to back (default 3), one failure doesn't stop the rest
   poll             Long-poll Telegram for approve/reject decisions (run as a service)
   publish <id>     Publish an approved/rendered post by ID (bypass for manual ops)
   analytics        Pull IG insights for recent posts and update topic weights
@@ -23,6 +24,11 @@ try {
     case "run": {
       const id = await runPipeline();
       console.log(`Done. Post ID: ${id}`);
+      break;
+    }
+    case "run-batch": {
+      const count = arg ? Number(arg) : 3;
+      await runBatch(count);
       break;
     }
     case "poll":

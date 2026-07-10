@@ -22,7 +22,8 @@ npm run serve          # static server so the IG Graph API can fetch the PNGs
 
 | Command | What it does |
 |---|---|
-| `npm run pipeline` | Full daily run: fact → fact-check → cover → render → review queue (or direct publish when `REVIEW_REQUIRED=false`) |
+| `npm run pipeline` | One full run: fact → fact-check → cover → render → review queue (or direct publish when `REVIEW_REQUIRED=false`) |
+| `npm run pipeline:batch -- <n>` | Run the pipeline `n` times back to back (default 3) — one failed run doesn't stop the rest |
 | `npm run poll` | Long-polls Telegram for the ✅/❌ buttons; approval triggers the Instagram publish |
 | `npm run publish-post -- <id>` | Manually publish a rendered/approved post |
 | `npm run analytics` | Pulls IG insights for recent posts and nudges topic weights (run weekly) |
@@ -34,7 +35,8 @@ npm run serve          # static server so the IG Graph API can fetch the PNGs
 Either import [n8n/workflow.json](n8n/workflow.json) into a self-hosted n8n (daily schedule → execute command), or use plain cron:
 
 ```cron
-0 9 * * * cd /opt/social-generator && npm run pipeline >> pipeline.log 2>&1
+# 3 posts, back to back, once a day
+0 9 * * * cd /opt/social-generator && npm run pipeline:batch >> pipeline.log 2>&1
 0 10 * * 1 cd /opt/social-generator && npm run analytics >> analytics.log 2>&1
 ```
 

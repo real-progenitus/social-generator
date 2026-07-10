@@ -45,28 +45,31 @@ async function downloadCommonsPhoto(photo, outDir) {
 
 // Kept deliberately plain: no "neon," "abstract composition," "waveforms," or
 // illustrated-silhouette language — that vocabulary is what makes these read
-// as obvious AI art. Ask for something a photographer could have shot.
+// as obvious AI art. Ask for something a photographer could have shot, with
+// real artistic/editorial intent (composition, light, mood) rather than a
+// flat literal snapshot.
 const NO_AI_LOOK =
   "Realistic photograph, not digital art or illustration. No text, no logos, no illustrated or " +
   "cartoon elements, no overlaid graphics, waveforms, or sound-wave visuals. Portrait orientation, " +
-  "natural lighting, shot on a professional camera.";
+  "shot on a professional camera with intentional, artistic composition: dramatic natural light, " +
+  "meaningful framing, shallow depth of field, a genuine editorial/documentary-photography feel.";
 
 function buildPrompt(fact) {
   if (fact.fact_type === "artist_specific" && fact.artist_name) {
     if (config.artistImageMode === "photoreal") {
       // Explicit opt-in only — see README §2.2 for the legal/platform risk.
       return (
-        `Editorial photograph evoking the world of ${fact.artist_name}: stage, gear, and atmosphere ` +
-        `from their era of electronic music. Theme: ${fact.topic}. ${NO_AI_LOOK}`
+        `Artistic editorial photograph evoking the world of ${fact.artist_name}: stage, gear, and ` +
+        `atmosphere from their era of electronic music. Theme: ${fact.topic}. ${NO_AI_LOOK}`
       );
     }
     return (
-      `Photograph of the gear, stage, and atmosphere associated with ${fact.artist_name}'s era of ` +
-      `electronic music: synthesizers, mixing decks, turntables, or an empty stage or venue. ` +
+      `Artistic photograph of the gear, stage, and atmosphere associated with ${fact.artist_name}'s ` +
+      `era of electronic music: synthesizers, mixing decks, turntables, or an empty stage or venue. ` +
       `No people, no faces, no human figures or silhouettes. Theme: ${fact.topic}. ${NO_AI_LOOK}`
     );
   }
-  return `Photograph representing: ${fact.topic}. An authentic club, festival, or studio environment. ${NO_AI_LOOK}`;
+  return `Artistic photograph representing: ${fact.topic}. An authentic club, festival, or studio environment. ${NO_AI_LOOK}`;
 }
 
 function mockCover(outDir) {

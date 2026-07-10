@@ -9,6 +9,7 @@
   },
   "scripts": {
     "pipeline": "node src/cli.js run",
+    "pipeline:batch": "node src/cli.js run-batch",
     "poll": "node src/cli.js poll",
     "publish-post": "node src/cli.js publish",
     "analytics": "node src/cli.js analytics",

@@ -74,3 +74,26 @@ export async function runPipeline() {
 
   return postId;
 }
+
+/**
+ * Run the pipeline `count` times back to back (sequentially, not in
+ * parallel — each run's fact must be recorded before the next one's dedup
+ * check runs). One failed run (e.g. a fact that doesn't pass verification)
+ * doesn't abort the rest of the batch.
+ */
+export async function runBatch(count) {
+  const results = [];
+  for (let i = 1; i <= count; i++) {
+    console.log(`[pipeline] batch run ${i}/${count}`);
+    try {
+      const id = await runPipeline();
+      results.push({ ok: true, id });
+    } catch (err) {
+      console.error(`[pipeline] batch run ${i}/${count} failed: ${err.message}`);
+      results.push({ ok: false, error: err.message });
+    }
+  }
+  const succeeded = results.filter((r) => r.ok).length;
+  console.log(`[pipeline] batch complete: ${succeeded}/${count} succeeded`);
+  return results;
+}
