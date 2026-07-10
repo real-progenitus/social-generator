@@ -49,6 +49,13 @@ db.exec(`
     shares INTEGER,
     fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS used_commons_photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    description_url TEXT NOT NULL UNIQUE,
+    subject TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 export function createPost(fact) {
@@ -103,6 +110,18 @@ export function bumpTopicWeight(topic, delta) {
        weight = MAX(0.2, MIN(3.0, weight + excluded.weight - 1.0)),
        updated_at = datetime('now')`,
   ).run(topic, delta);
+}
+
+export function recordUsedCommonsPhoto(descriptionUrl, subject) {
+  db.prepare(
+    "INSERT OR IGNORE INTO used_commons_photos (description_url, subject) VALUES (?, ?)",
+  ).run(descriptionUrl, subject ?? null);
+}
+
+export function usedCommonsPhotoUrls() {
+  return new Set(
+    db.prepare("SELECT description_url FROM used_commons_photos").all().map((r) => r.description_url),
+  );
 }
 
 export function recordInsights(postId, metrics) {

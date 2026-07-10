@@ -14,7 +14,7 @@ function stripHtml(html) {
     .trim();
 }
 
-function pickBestImage(pages) {
+function pickBestImage(pages, usedUrls) {
   const candidates = [];
   for (const page of Object.values(pages)) {
     const info = page.imageinfo?.[0];
@@ -24,6 +24,8 @@ function pickBestImage(pages) {
 
     const license = info.extmetadata?.LicenseShortName?.value ?? "";
     if (!PERMISSIVE_LICENSE.test(license)) continue;
+
+    if (usedUrls.has(info.descriptionurl)) continue;
 
     const credit =
       stripHtml(info.extmetadata?.Artist?.value) ||
@@ -46,10 +48,12 @@ function pickBestImage(pages) {
 
 /**
  * Look up a freely-licensed photo of a subject (artist, venue, or festival)
- * on Wikimedia Commons. Returns null if nothing suitable turns up (caller
+ * on Wikimedia Commons, skipping any file already recorded as used
+ * (`usedUrls`, keyed by descriptionUrl) so the same post subject doesn't get
+ * the same cover twice. Returns null if nothing unused turns up (caller
  * falls back to AI art).
  */
-export async function fetchCommonsPhoto(subject) {
+export async function fetchCommonsPhoto(subject, usedUrls = new Set()) {
   const url = new URL(COMMONS_API);
   url.search = new URLSearchParams({
     action: "query",
@@ -57,7 +61,7 @@ export async function fetchCommonsPhoto(subject) {
     generator: "search",
     gsrsearch: `${subject} filetype:bitmap`,
     gsrnamespace: "6",
-    gsrlimit: "15",
+    gsrlimit: "30",
     prop: "imageinfo",
     iiprop: "url|size|mime|extmetadata",
     iiurlwidth: String(REQUEST_WIDTH),
@@ -74,5 +78,5 @@ export async function fetchCommonsPhoto(subject) {
   const pages = json.query?.pages;
   if (!pages) return null;
 
-  return pickBestImage(pages);
+  return pickBestImage(pages, usedUrls);
 }
