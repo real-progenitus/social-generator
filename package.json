@@ -1,0 +1,24 @@
+{
+  "name": "social-generator",
+  "version": "0.1.0",
+  "description": "Electronic Music Facts — daily automated Instagram carousel pipeline",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "pipeline": "node src/cli.js run",
+    "poll": "node src/cli.js poll",
+    "publish-post": "node src/cli.js publish",
+    "analytics": "node src/cli.js analytics",
+    "serve": "node src/cli.js serve",
+    "status": "node src/cli.js status"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "better-sqlite3": "^12.11.1",
+    "dotenv": "^17.4.2",
+    "puppeteer": "^25.3.0"
+  }
+}

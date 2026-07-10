@@ -1,0 +1,45 @@
+import "dotenv/config";
+import path from "node:path";
+
+function bool(value, fallback) {
+  if (value === undefined || value === "") return fallback;
+  return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+}
+
+export const config = {
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
+  claudeModel: process.env.CLAUDE_MODEL ?? "claude-sonnet-4-6",
+
+  xaiApiKey: process.env.XAI_API_KEY ?? "",
+  grokImageModel: process.env.GROK_IMAGE_MODEL ?? "grok-2-image",
+
+  // "stylized" | "photoreal" — stylized by default; photoreal likeness of real
+  // musicians carries right-of-publicity and Meta policy risk (see README §2.2)
+  artistImageMode:
+    process.env.ARTIST_IMAGE_MODE === "photoreal" ? "photoreal" : "stylized",
+
+  reviewRequired: bool(process.env.REVIEW_REQUIRED, true),
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
+  telegramChatId: process.env.TELEGRAM_CHAT_ID ?? "",
+
+  igUserId: process.env.IG_USER_ID ?? "",
+  metaAccessToken: process.env.META_ACCESS_TOKEN ?? "",
+
+  publicMediaBaseUrl: (process.env.PUBLIC_MEDIA_BASE_URL ?? "").replace(/\/$/, ""),
+  mediaServerPort: Number(process.env.MEDIA_SERVER_PORT ?? 8787),
+
+  dbPath: path.resolve(process.env.DB_PATH ?? "./data/state.db"),
+  outputDir: path.resolve(process.env.OUTPUT_DIR ?? "./output"),
+  postHandle: process.env.POST_HANDLE ?? "@electronic.music.facts",
+
+  mockMode: bool(process.env.MOCK_MODE, false),
+};
+
+export function requireConfig(keys) {
+  const missing = keys.filter((k) => !config[k]);
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required configuration: ${missing.join(", ")}. Set them in .env (see .env.example).`,
+    );
+  }
+}

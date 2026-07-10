@@ -2,6 +2,55 @@
 
 Daily automated pipeline that posts an Instagram carousel of electronic music facts.
 
+## Quick Start
+
+```bash
+npm install
+cp .env.example .env   # fill in API keys — see .env.example comments
+
+# Dry run without any API keys (canned fact + placeholder cover):
+MOCK_MODE=true REVIEW_REQUIRED=false npm run pipeline
+open output/post-1/    # inspect the rendered slides
+
+# Production run (needs ANTHROPIC_API_KEY, XAI_API_KEY, Telegram + Meta creds):
+npm run pipeline       # generates, renders, sends to Telegram for approval
+npm run poll           # long-running service: processes approve/reject buttons
+npm run serve          # static server so the IG Graph API can fetch the PNGs
+```
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `npm run pipeline` | Full daily run: fact → fact-check → cover → render → review queue (or direct publish when `REVIEW_REQUIRED=false`) |
+| `npm run poll` | Long-polls Telegram for the ✅/❌ buttons; approval triggers the Instagram publish |
+| `npm run publish-post -- <id>` | Manually publish a rendered/approved post |
+| `npm run analytics` | Pulls IG insights for recent posts and nudges topic weights (run weekly) |
+| `npm run serve` | Serves `output/` over HTTP (put behind a public reverse proxy; set `PUBLIC_MEDIA_BASE_URL`) |
+| `npm run status` | Shows recent posts and their pipeline states |
+
+### Scheduling
+
+Either import [n8n/workflow.json](n8n/workflow.json) into a self-hosted n8n (daily schedule → execute command), or use plain cron:
+
+```cron
+0 9 * * * cd /opt/social-generator && npm run pipeline >> pipeline.log 2>&1
+0 10 * * 1 cd /opt/social-generator && npm run analytics >> analytics.log 2>&1
+```
+
+`npm run poll` and `npm run serve` should run as always-on services (systemd/pm2).
+
+### Decisions taken (from §5)
+
+1. `ARTIST_IMAGE_MODE` defaults to **stylized** (photoreal requires an explicit env opt-in)
+2. Human review gate is **on by default** (`REVIEW_REQUIRED=true`)
+3. Brand template: dark `#0d0221` background, neon `#b9ff2e`/`#2ee6ff` accents, system sans — all in [templates/slide.html](templates/slide.html)
+4. Initial topic seed list: [data/topics.json](data/topics.json) (30 seeds across genres/eras/gear/artists/venues)
+
+---
+
+# Architecture
+
 ## 1. Overview
 Daily automated pipeline that posts an Instagram carousel:
 - **Cover slide**: AI-generated image, either (a) generic electronic music visual, or (b) an AI-edited/stylized image referencing the artist/group tied to the fact

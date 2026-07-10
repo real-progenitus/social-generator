@@ -1,0 +1,49 @@
+{
+  "name": "Electronic Music Facts — Daily Carousel",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/social-generator && npm run pipeline"
+      },
+      "id": "run-pipeline",
+      "name": "Run pipeline",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [240, 0]
+    }
+  ],
+  "connections": {
+    "Daily 09:00": {
+      "main": [
+        [
+          {
+            "node": "Run pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
