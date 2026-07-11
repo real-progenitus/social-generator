@@ -8,7 +8,7 @@ function bool(value, fallback) {
 
 export const config = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
-  claudeModel: process.env.CLAUDE_MODEL ?? "claude-sonnet-4-6",
+  claudeModel: process.env.CLAUDE_MODEL ?? "claude-sonnet-5",
 
   xaiApiKey: process.env.XAI_API_KEY ?? "",
   grokImageModel: process.env.GROK_IMAGE_MODEL ?? "grok-2-image",

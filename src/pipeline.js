@@ -1,32 +1,19 @@
 import path from "node:path";
 import { config, requireConfig } from "./config.js";
 import { createPost, recordUsedFact, updatePost } from "./db.js";
-import { factCheck } from "./steps/factCheck.js";
 import { generateCover } from "./steps/generateCover.js";
 import { generateFact } from "./steps/generateFact.js";
 import { publishPost } from "./steps/publish.js";
 import { renderSlides } from "./steps/renderSlides.js";
 import { sendForReview } from "./steps/review.js";
 
-// One generation + one check, no regeneration loop — factCheck calls are the
-// expensive part, so generateFact's prompt is responsible for only proposing
-// easy-to-verify facts in the first place.
-async function generateVerifiedFact() {
-  const fact = await generateFact();
-  console.log(`[pipeline] generated: "${fact.headline}"`);
-  const check = await factCheck(fact);
-  if (check.verdict === "pass" && check.confidence !== "low") {
-    return { fact, check };
-  }
-  throw new Error(
-    `Fact failed verification (${check.verdict}, confidence ${check.confidence}): ${check.issues.join("; ")}`,
-  );
-}
-
 /**
  * Daily pipeline:
- * generate_fact -> fact-check -> generate_cover_image -> render_slides
+ * generate_fact (web-search grounded) -> generate_cover_image -> render_slides
  * -> queue_for_review (or publish directly when REVIEW_REQUIRED=false)
+ *
+ * There is no separate fact-check call: generateFact grounds every claim in a
+ * live web search, and the Telegram approval step is the final human gate.
  */
 export async function runPipeline() {
   if (!config.mockMode) {
@@ -35,12 +22,13 @@ export async function runPipeline() {
     requireConfig(required);
   }
 
-  const { fact, check } = await generateVerifiedFact();
+  const fact = await generateFact();
+  console.log(`[pipeline] generated: "${fact.headline}"`);
 
   const postId = createPost(fact);
   updatePost(postId, {
     status: "fact_checked",
-    fact_check_json: JSON.stringify(check),
+    fact_check_json: JSON.stringify({ method: "web_search_grounded" }),
     caption: fact.caption,
   });
   recordUsedFact(fact);

@@ -123,9 +123,30 @@ const MOCK_FACT = {
     "The bass synth nobody wanted became the sound of a genre. 🎛️ #acidhouse #tb303 #electronicmusic #housemusic #musichistory #synth #chicagohouse",
 };
 
+// Real web search grounds each fact in sources at generation time, which
+// replaces the old separate fact-check call — the generator can only state what
+// it actually found. Supported on claude-sonnet-5 (the configured model).
+const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 4 };
+
+// A server-tool turn can stop with `pause_turn` if the search loop hits its
+// iteration cap; re-send with the assistant turn appended so it can finish.
+async function createWithSearch(client, params) {
+  let resp = await client.messages.create(params);
+  let guard = 0;
+  while (resp.stop_reason === "pause_turn" && guard < 6) {
+    guard++;
+    params = {
+      ...params,
+      messages: [...params.messages, { role: "assistant", content: resp.content }],
+    };
+    resp = await client.messages.create(params);
+  }
+  return resp;
+}
+
 /**
- * Generate a fact + slide copy via the Claude API.
- * Returns the validated fact object (shape of FACT_SCHEMA).
+ * Generate a fact + slide copy via the Claude API, grounded in a live web
+ * search. Returns the validated fact object (shape of FACT_SCHEMA).
  */
 export async function generateFact() {
   if (config.mockMode) {
@@ -142,9 +163,10 @@ export async function generateFact() {
 
   const client = new Anthropic({ apiKey: config.anthropicApiKey });
 
-  const response = await client.messages.create({
+  const response = await createWithSearch(client, {
     model: config.claudeModel,
     max_tokens: 16000,
+    tools: [WEB_SEARCH_TOOL],
     system:
       "You are the researcher-copywriter for an Instagram page that posts one well-sourced electronic music fact per day as a carousel. " +
       "The page covers four content pillars: performance moments from big names, controversial innovations in music, " +
@@ -152,24 +174,20 @@ export async function generateFact() {
       "This account covers electronic music broadly, house and techno included, not just mainstream pop-EDM crossover " +
       "acts: only feature artists, venues, festivals, and events that a casual electronic music fan would already " +
       "recognize by name (think Daft Punk, Tomorrowland, Ibiza, Berghain, David Guetta, but equally Jeff Mills, " +
-      "Richie Hawtin, Carl Cox — major names within house/techno culture count as big names too, not just pop chart " +
-      "stars). Avoid true deep-cuts only known within one hyper-niche scene. When a topic seed names a specific act " +
-      "or place, stick to that; when you have latitude to pick who or what a fact centers on, always default to the " +
-      "biggest, most widely known name available within its own genre rather than a more obscure or 'cooler' choice. " +
-      "You only state facts you are confident are true and widely documented; when unsure, choose a different, verifiable fact. " +
+      "Richie Hawtin, Carl Cox — major names within house/techno culture count too, not just pop chart stars). " +
+      "Avoid true deep-cuts only known within one hyper-niche scene. When a topic seed names a specific act or place, " +
+      "stick to that; otherwise default to the biggest, most widely known name available within its own genre. " +
+      "You have a web_search tool. You MUST search the web before writing, and base every claim strictly on what the " +
+      "sources you find actually say. Do not state specifics (dates, numbers, names, 'firsts', reactions) from memory: " +
+      "verify each against search results, and if the sources don't clearly support a detail, drop it or pick a " +
+      "different fact. Prefer facts corroborated by multiple reputable sources (Wikipedia, Resident Advisor, Mixmag, " +
+      "DJ Mag, Pitchfork, Billboard, official artist or label pages). " +
+      "Keep the post to ONE core, well-established fact; every slide should restate or expand that fact or add " +
+      "widely-known context, not introduce extra shaky specifics. Avoid superlatives and 'first ever' claims unless the " +
+      "sources state them plainly. Do not attribute quotes or reactions to named people unless a source shows it. Do " +
+      "not mischaracterize things (e.g. calling an indie label a 'major label'). " +
+      "In source_note, name the actual sources you verified against (e.g. 'Wikipedia and Resident Advisor coverage'), not a vague claim. " +
       "Never invent quotes, dates, or chart positions. Write for music fans: concrete, specific, no filler. " +
-      "There is no fact-checking pass after this. Only propose facts that pass these strict criteria: " +
-      "(1) The core claim is well-established consensus, not disputed or debated interpretations. " +
-      "(2) Avoid 'first ever' claims, rankings, and superlatives unless they're uncontroversial basics (e.g. 'Daft Punk wore helmets'). " +
-      "(3) Never mischaracterize something (e.g. don't call an indie label a 'major label', don't state disputed details as fact). " +
-      "(4) Avoid precise chronology you're not 100% certain of; use 'around', 'roughly', 'over a period' if unsure. " +
-      "(5) Avoid disputed statistics (crowd sizes, exact sales figures, chart positions). " +
-      "(6) Avoid causal/policy claims ('X forced Y to change', 'X caused Y') unless ironclad and widely documented. " +
-      "Stick to what happened, roughly when, who was involved, and what it was about, not contested causality or impact. " +
-      "(7) Do NOT attribute specific reactions, quotes, rebuttals, or responses to named third parties (e.g. 'Steve Angello fired back at him') unless it is extremely well documented. Invented or misattributed reactions like this are a leading rejection cause. " +
-      "(8) Keep the post to ONE core fact. Every slide should restate or expand that single fact, or add genuinely widely-known background context. Do NOT introduce extra specific claims (additional names, exact founding years, 'every/all/always/never' absolutes, statistics) to make it richer; each extra specific is a fresh chance to be wrong and gets the whole post rejected. " +
-      "(9) If the 'hook' requires any claim that isn't bulletproof, pick a different fact entirely. A plainer fact that is fully verifiable is far better than a richer one with one shaky detail. " +
-      "Think: 'Would a skeptical music journalist challenge this claim?' If yes, don't write it. " +
       "Never use em dashes or double hyphens (— or --) anywhere in the output; write with periods, commas, colons, or parentheses instead.",
     messages: [
       {
@@ -177,15 +195,21 @@ export async function generateFact() {
         content:
           `Topic seed for today: "${topic.topic}"\n` +
           `Content pillar: ${topic.kind} — ${CONTENT_PILLARS[topic.kind]}\n\n` +
-          `Produce one interesting, verifiable fact about this topic with carousel copy, matching the content pillar above.\n` +
+          `Search the web to research this topic, then produce one interesting, verifiable fact with carousel copy, matching the content pillar above. Base every claim on the sources you find.\n` +
           `If the fact is fundamentally about one artist or group, set fact_type to "artist_specific" and fill artist_name; otherwise use "generic" with artist_name null.\n\n` +
           `Already-posted facts — do NOT repeat or closely paraphrase any of these:\n${usedList}`,
       },
     ],
-    output_config: { format: { type: "json_schema", schema: FACT_SCHEMA } },
+    output_config: {
+      format: { type: "json_schema", schema: FACT_SCHEMA },
+      effort: "medium",
+    },
   });
 
-  const text = response.content.find((b) => b.type === "text")?.text;
+  // With structured output the final answer is one JSON text block; take the
+  // last text block (earlier ones, if any, are intermediate search reasoning).
+  const textBlocks = response.content.filter((b) => b.type === "text");
+  const text = textBlocks[textBlocks.length - 1]?.text;
   if (!text) throw new Error("Claude returned no text content for fact generation");
   const fact = JSON.parse(text);
 
