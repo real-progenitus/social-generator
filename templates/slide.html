@@ -174,7 +174,9 @@
   }
   /* Text block anchors at a different height per variant, so consecutive
      slides read as structurally different, not just differently decorated. */
-  .v1 .body-text-wrap { align-items: flex-start; }
+  /* Top-anchored: pad the top so the lead bar isn't cramped against the
+     kicker chip. Center/bottom variants keep the lead bar away from it. */
+  .v1 .body-text-wrap { align-items: flex-start; padding-top: 60px; }
   .v2 .body-text-wrap { align-items: center; }
   .v3 .body-text-wrap { align-items: flex-end; }
 
