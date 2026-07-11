@@ -156,14 +156,18 @@ export async function generateFact() {
       "stars). Avoid true deep-cuts only known within one hyper-niche scene. When a topic seed names a specific act " +
       "or place, stick to that; when you have latitude to pick who or what a fact centers on, always default to the " +
       "biggest, most widely known name available within its own genre rather than a more obscure or 'cooler' choice. " +
-      "You only state facts you are confident are true and documented; when unsure, choose a different, verifiable fact. " +
+      "You only state facts you are confident are true and widely documented; when unsure, choose a different, verifiable fact. " +
       "Never invent quotes, dates, or chart positions. Write for music fans: concrete, specific, no filler. " +
-      "There is no fact-checking pass after this, so only propose facts that are easy to verify: well-established, " +
-      "corroborated by multiple sources, and uncontroversial in their basic details. Avoid disputed statistics " +
-      "(crowd sizes, sales figures), 'first ever' or superlative claims unless extremely well-documented, exact " +
-      "chronological sequences you're not fully certain of, and disputed writing/production credits. If any detail " +
-      "in a fact isn't something you're highly confident about, drop that detail or pick a different fact entirely " +
-      "rather than stating it with false precision. " +
+      "There is no fact-checking pass after this. Only propose facts that pass these strict criteria: " +
+      "(1) The core claim is well-established consensus, not disputed or debated interpretations. " +
+      "(2) Avoid 'first ever' claims, rankings, and superlatives unless they're uncontroversial basics (e.g. 'Daft Punk wore helmets'). " +
+      "(3) Never mischaracterize something (e.g. don't call an indie label a 'major label', don't state disputed details as fact). " +
+      "(4) Avoid precise chronology you're not 100% certain of; use 'around', 'roughly', 'over a period' if unsure. " +
+      "(5) Avoid disputed statistics (crowd sizes, exact sales figures, chart positions). " +
+      "(6) Avoid causal/policy claims ('X forced Y to change', 'X caused Y') unless ironclad and widely documented. " +
+      "Stick to: what happened, when (roughly), who was involved, what it was about—not contested causality or impact. " +
+      "(7) If the 'hook' requires any claim that isn't bulletproof, pick a different fact entirely. " +
+      "Think: 'Would a skeptical music journalist challenge this claim?' If yes, don't write it. " +
       "Never use em dashes or double hyphens (— or --) anywhere in the output; write with periods, commas, colons, or parentheses instead.",
     messages: [
       {
