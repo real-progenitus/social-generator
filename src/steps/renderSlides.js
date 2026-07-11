@@ -50,30 +50,40 @@ function photoSlideHtml(photo) {
   </div>`;
 }
 
-// Minimal geometric accent marks, in ink at low opacity, rotated per body
-// slide so consecutive slides don't look identical. Top-right mark + a bottom
-// accent per variant; slide.html positions and fades them via the CSS classes.
-const ACCENTS = [
-  // v1: dot grid (top-right) + underline stroke (bottom-left)
-  `<div class="accent accent-tr"><svg width="60" height="60" viewBox="0 0 60 60" fill="currentColor"><circle cx="6" cy="6" r="4"/><circle cx="30" cy="6" r="4"/><circle cx="54" cy="6" r="4"/><circle cx="6" cy="30" r="4"/><circle cx="30" cy="30" r="4"/><circle cx="54" cy="30" r="4"/><circle cx="6" cy="54" r="4"/><circle cx="30" cy="54" r="4"/><circle cx="54" cy="54" r="4"/></svg></div>
-   <div class="accent accent-bl"><svg width="160" height="12" viewBox="0 0 160 12" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><path d="M4 6 H156"/></svg></div>`,
-  // v2: plus + circle (top-right) + quarter-circle arc (bottom-right)
-  `<div class="accent accent-tr"><svg width="72" height="44" viewBox="0 0 72 44" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><path d="M18 6 V38 M2 22 H34"/><circle cx="56" cy="22" r="12"/></svg></div>
-   <div class="accent accent-br"><svg width="120" height="120" viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="4"><path d="M4 116 A112 112 0 0 0 116 4"/></svg></div>`,
-  // v3: corner ticks (top-right) + vertical dashes (bottom-left)
-  `<div class="accent accent-tr"><svg width="56" height="56" viewBox="0 0 56 56" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><path d="M52 20 V4 H36"/><path d="M4 52 H20"/></svg></div>
-   <div class="accent accent-bl"><svg width="104" height="36" viewBox="0 0 104 36" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><path d="M6 6 V30 M34 6 V30 M62 6 V30 M90 6 V30"/></svg></div>`,
+// Large faint background shapes for depth.
+const HERO = {
+  circles: `<svg width="360" height="360" viewBox="0 0 360 360" fill="none" stroke="currentColor" stroke-width="3"><circle cx="180" cy="180" r="178"/><circle cx="180" cy="180" r="126"/><circle cx="180" cy="180" r="74"/></svg>`,
+  circle: `<svg width="320" height="320" viewBox="0 0 320 320" fill="none" stroke="currentColor" stroke-width="3"><circle cx="160" cy="160" r="158"/></svg>`,
+};
+// Smaller, bolder foreground marks that sit where the slide counter used to be.
+const MARK = {
+  dots: `<svg width="26" height="118" viewBox="0 0 26 118" fill="currentColor"><circle cx="13" cy="13" r="10"/><circle cx="13" cy="59" r="10"/><circle cx="13" cy="105" r="10"/></svg>`,
+  bracket: `<svg width="84" height="84" viewBox="0 0 84 84" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"><path d="M80 8 H8 V80"/></svg>`,
+  plus: `<svg width="72" height="72" viewBox="0 0 72 72" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round"><path d="M36 8 V64 M8 36 H64"/></svg>`,
+};
+
+// Per variant: a hero shape (placement + kind) plus a bold top-right mark. The
+// three variants also anchor the body text at different heights (see the .v1/
+// .v2/.v3 rules in slide.html), so slides feel structurally distinct on swipe.
+const VARIANTS = [
+  { heroClass: "hero-br", hero: HERO.circles, mark: MARK.dots },
+  { heroClass: "hero-cr", hero: HERO.circle, mark: MARK.bracket },
+  { heroClass: "hero-tl", hero: HERO.circles, mark: MARK.plus },
 ];
 
 function bodyHtml(text, variant, isLast, sourceNote) {
-  const v = variant + 1;
+  const v = VARIANTS[variant];
+  // The hero reaches the card's lower edge on some variants, where the source
+  // box lives on the final slide — drop it there so nothing overlaps.
+  const hero = isLast ? "" : `<div class="accent accent-hero ${v.heroClass}">${v.hero}</div>`;
   return `
-  <div class="body-slide v${v}">
+  <div class="body-slide v${variant + 1}">
     <div class="ring ring-outer"></div>
     <div class="ring ring-inner"></div>
     <div class="ring ring-bl"></div>
     <div class="card">
-      ${ACCENTS[variant]}
+      ${hero}
+      <div class="accent accent-mark mark-tr">${v.mark}</div>
       <div class="top-row">
         <span class="kicker">Electronic Music Facts</span>
       </div>
@@ -99,7 +109,7 @@ export async function renderSlides(fact, coverImage, outDir) {
   const template = fs.readFileSync(templatePath, "utf8");
 
   const bodySlides = fact.slides.map((text, i) =>
-    bodyHtml(text, i % ACCENTS.length, i === fact.slides.length - 1, fact.source_note),
+    bodyHtml(text, i % VARIANTS.length, i === fact.slides.length - 1, fact.source_note),
   );
 
   // Drop the optional photo slide into the middle of the body slides, but only

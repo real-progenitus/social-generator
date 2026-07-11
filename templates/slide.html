@@ -151,44 +151,55 @@
     font-size: 19px; padding: 8px 16px; margin-bottom: 0;
     letter-spacing: 2.5px; border-radius: 7px;
   }
-  /* Minimal geometric accents — replaced the old slide counter and ghost
-     numeral (Instagram already shows carousel position). Subtle ink marks,
-     positioned differently per body-slide variant, purely for visual variety. */
+  /* Decorative geometry — replaced the old slide counter/ghost numeral.
+     Two tiers: a large faint "hero" shape for depth, and a smaller mark that
+     actually registers (unlike the near-invisible marks in the first pass). */
   .accent {
     position: absolute; z-index: 0;
     color: var(--ink-deep);
     pointer-events: none;
   }
   .accent svg { display: block; }
-  .accent-tr { top: 54px; right: 58px; opacity: 0.16; }
-  .accent-bl { left: 64px; bottom: 150px; opacity: 0.20; }
-  .accent-br { right: 56px; bottom: 132px; opacity: 0.14; }
+  .accent-hero { opacity: 0.10; }
+  .accent-mark { opacity: 0.55; }
+  .hero-br { right: -104px; bottom: -104px; }
+  .hero-cr { right: -84px; top: 250px; }
+  .hero-tl { left: -108px; top: -108px; }
+  .mark-tr { top: 54px; right: 60px; }
 
   .body-text-wrap {
     position: relative; z-index: 1;
     flex: 1;
-    display: flex; align-items: center;
+    display: flex;
   }
+  /* Text block anchors at a different height per variant, so consecutive
+     slides read as structurally different, not just differently decorated. */
+  .v1 .body-text-wrap { align-items: flex-start; }
+  .v2 .body-text-wrap { align-items: center; }
+  .v3 .body-text-wrap { align-items: flex-end; }
+
   .body-text {
     font-size: 52px; font-weight: 600; line-height: 1.38;
     color: var(--ink);
   }
-  /* Per-variant layout touches so consecutive slides don't read identically. */
-  .v2 .body-text::before {
+  /* Pronounced solid lead bar above the text — a bold brand mark, sized per
+     variant. Moves with the text so it reads correctly at any anchor height. */
+  .body-text::before {
     content: ""; display: block;
-    width: 72px; height: 5px; border-radius: 3px;
-    background: var(--ink-deep); opacity: 0.85;
-    margin-bottom: 30px;
+    height: 8px; border-radius: 4px;
+    background: var(--ink-deep);
   }
-  .v3 .body-text {
-    padding-left: 40px;
-    border-left: 4px solid rgba(13, 15, 26, 0.16);
-  }
+  .v1 .body-text::before { width: 104px; margin-bottom: 34px; }
+  .v2 .body-text::before { width: 64px; margin-bottom: 28px; }
+  .v3 .body-text::before { width: 140px; margin-bottom: 34px; }
   .source {
     position: relative; z-index: 1;
+    margin-top: 30px;
     font-size: 25px; color: var(--muted); line-height: 1.48;
-    background: rgba(13, 15, 26, 0.045);
-    border-left: 4px solid var(--ink-deep);
+    /* Opaque (not translucent) so background geometry can never show through
+       it — the earlier translucent fill let accent lines bleed over the text. */
+    background: #e9ebf1;
+    border-left: 5px solid var(--ink-deep);
     border-radius: 4px 14px 14px 4px;
     padding: 20px 26px;
   }
