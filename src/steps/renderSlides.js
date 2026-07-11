@@ -37,14 +37,29 @@ function coverHtml(fact, coverImage) {
   </div>`;
 }
 
+function truncate(text, max) {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+// Ground the extra photo in the fact instead of leaving it to speak for
+// itself: prefer Commons' own description of what the photo shows (usually
+// concrete — a venue, a date, an event), and fall back to a line tying it to
+// the fact's subject when Commons has no description on file.
+function buildPhotoRelation(photo, fact) {
+  if (photo.description) return truncate(photo.description, 160);
+  const subject = fact.image_subject || fact.artist_name;
+  return subject ? `Also pictured: ${subject}, the subject of today's fact.` : "Also pictured in today's story.";
+}
+
 // Full-bleed photo slide for a second Commons photo of the subject, dropped
 // into the middle of the carousel to break up the text slides.
-function photoSlideHtml(photo) {
+function photoSlideHtml(photo, relation) {
   const credit = photo.credit ? `${esc(photo.credit)} / Wikimedia Commons` : "Wikimedia Commons";
   return `
   <div class="cover photo-slide" style="background-image: url('${imageUri(photo)}')">
     <div class="scrim"></div>
     <div class="content">
+      <div class="photo-relation">${esc(relation)}</div>
       <div class="photo-credit">Photo: ${credit}</div>
     </div>
   </div>`;
@@ -118,7 +133,7 @@ export async function renderSlides(fact, coverImage, outDir) {
   const withinLimit = 1 + bodySlides.length + 1 <= IG_CAROUSEL_MAX;
   if (extra && withinLimit) {
     const mid = Math.ceil(bodySlides.length / 2);
-    bodySlides.splice(mid, 0, photoSlideHtml(extra));
+    bodySlides.splice(mid, 0, photoSlideHtml(extra, buildPhotoRelation(extra, fact)));
   }
 
   const slides = [coverHtml(fact, coverImage), ...bodySlides];

@@ -25,13 +25,30 @@ function stripEmDashes(text) {
   return text.replace(/\s*(--|—)\s*/g, ", ").replace(/,(\s*,)+/g, ",");
 }
 
+// The model sometimes double-escapes non-ASCII characters in the JSON string
+// output: it writes a backslash-escaped unicode sequence as literal text
+// inside the string value, rather than an actual accented character, so
+// JSON.parse leaves the raw six-character escape sequence behind instead of
+// decoding it (e.g. "Hutter" ends up followed by a literal backslash-u
+// sequence rather than becoming "Hütter"). Decode any leftover escapes.
+function unescapeUnicode(text) {
+  return text.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+function clean(text) {
+  return stripEmDashes(unescapeUnicode(text));
+}
+
 function sanitizeFact(fact) {
   return {
     ...fact,
-    headline: stripEmDashes(fact.headline),
-    slides: fact.slides.map(stripEmDashes),
-    source_note: stripEmDashes(fact.source_note),
-    caption: stripEmDashes(fact.caption),
+    artist_name: fact.artist_name ? unescapeUnicode(fact.artist_name) : fact.artist_name,
+    image_subject: fact.image_subject ? unescapeUnicode(fact.image_subject) : fact.image_subject,
+    topic: unescapeUnicode(fact.topic),
+    headline: clean(fact.headline),
+    slides: fact.slides.map(clean),
+    source_note: clean(fact.source_note),
+    caption: clean(fact.caption),
   };
 }
 

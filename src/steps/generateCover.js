@@ -41,6 +41,7 @@ async function downloadCommonsPhoto(photo, outDir, basename = "cover-raw") {
     path: file,
     mime: photo.mime,
     credit: photo.credit,
+    description: photo.description,
     attribution: `Photo: ${photo.credit} / Wikimedia Commons (${photo.license})`,
   };
 }

@@ -49,6 +49,15 @@ function metaText(page, info) {
     .join(" ");
 }
 
+// Stricter signal than metaText(): title and Commons' own "ObjectName" field
+// are direct claims about what the file depicts. Categories/descriptions are
+// looser (a photo can be *categorized under* a subject without actually being
+// *of* it, e.g. a general festival crowd shot tagged with the artist's name),
+// so the extra mid-carousel slide is gated on this narrower match instead.
+function primaryText(page, info) {
+  return [page.title, info.extmetadata?.ObjectName?.value].filter(Boolean).join(" ");
+}
+
 function looksExcluded(text) {
   return EXCLUDE_PATTERN.test(text);
 }
@@ -87,6 +96,8 @@ function rankImages(pages, usedUrls) {
       license,
       descriptionUrl: info.descriptionurl,
       haystack: normalize(text),
+      titleHaystack: normalize(primaryText(page, info)),
+      description: stripHtml(info.extmetadata?.ImageDescription?.value),
     });
   }
   candidates.sort((a, b) => a.index - b.index);
@@ -133,12 +144,15 @@ export async function fetchCommonsPhoto(subject, usedUrls = new Set()) {
 
 /**
  * Returns the best cover photo of the subject plus, when available, one extra
- * photo for a mid-carousel slide. The cover is the top-ranked result (loose
- * match is fine, since the headline overlays it). The extra photo is held to a
- * stricter bar: it must clearly be about the subject (every significant token
- * of the subject name present in its metadata), because it stands on its own as
- * a full-bleed slide. When nothing beyond the cover clearly matches, only the
- * cover is returned and no extra slide is added.
+ * photo for a mid-carousel slide. Both are held to the same bar: the subject
+ * name must appear in the file's title or Commons' own "ObjectName" field, not
+ * merely a category/description mention. Plain relevance search alone isn't
+ * enough — Commons' own ranking can surface photos whose only connection to
+ * the subject is a shared word in categories or descriptions (e.g. "Kraftwerk"
+ * is also the German word for "power station", so a literal power plant photo
+ * can outrank real photos of the band). When no candidate clears that bar,
+ * fall back to Commons' top overall result as the cover with no extra slide,
+ * rather than returning nothing.
  */
 export async function fetchCommonsPhotos(subject, usedUrls = new Set()) {
   const pages = await searchCommons(subject);
@@ -147,6 +161,8 @@ export async function fetchCommonsPhotos(subject, usedUrls = new Set()) {
   if (ranked.length === 0) return [];
 
   const subjectNorm = normalize(subject);
-  const extra = ranked.slice(1).find((c) => matchesSubject(c.haystack, subjectNorm));
-  return extra ? [ranked[0], extra] : [ranked[0]];
+  const matching = ranked.filter((c) => matchesSubject(c.titleHaystack, subjectNorm));
+  const cover = matching[0] ?? ranked[0];
+  const extra = matching.find((c) => c !== cover);
+  return extra ? [cover, extra] : [cover];
 }
