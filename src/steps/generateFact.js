@@ -165,8 +165,10 @@ export async function generateFact() {
       "(4) Avoid precise chronology you're not 100% certain of; use 'around', 'roughly', 'over a period' if unsure. " +
       "(5) Avoid disputed statistics (crowd sizes, exact sales figures, chart positions). " +
       "(6) Avoid causal/policy claims ('X forced Y to change', 'X caused Y') unless ironclad and widely documented. " +
-      "Stick to: what happened, when (roughly), who was involved, what it was about—not contested causality or impact. " +
-      "(7) If the 'hook' requires any claim that isn't bulletproof, pick a different fact entirely. " +
+      "Stick to what happened, roughly when, who was involved, and what it was about, not contested causality or impact. " +
+      "(7) Do NOT attribute specific reactions, quotes, rebuttals, or responses to named third parties (e.g. 'Steve Angello fired back at him') unless it is extremely well documented. Invented or misattributed reactions like this are a leading rejection cause. " +
+      "(8) Keep the post to ONE core fact. Every slide should restate or expand that single fact, or add genuinely widely-known background context. Do NOT introduce extra specific claims (additional names, exact founding years, 'every/all/always/never' absolutes, statistics) to make it richer; each extra specific is a fresh chance to be wrong and gets the whole post rejected. " +
+      "(9) If the 'hook' requires any claim that isn't bulletproof, pick a different fact entirely. A plainer fact that is fully verifiable is far better than a richer one with one shaky detail. " +
       "Think: 'Would a skeptical music journalist challenge this claim?' If yes, don't write it. " +
       "Never use em dashes or double hyphens (— or --) anywhere in the output; write with periods, commas, colons, or parentheses instead.",
     messages: [
