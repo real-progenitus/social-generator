@@ -23,8 +23,23 @@ function stripHtml(html) {
     .trim();
 }
 
-function looksExcluded(page, info) {
-  const text = [
+// Lowercase, collapse punctuation to single spaces — so "Eiffel_65" and
+// "Eiffel 65" compare equal, and "panoramio_(65)" doesn't read as "... 65 ...".
+function normalize(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// A candidate is "clearly about" the subject only if the full subject name
+// appears as a contiguous phrase in its metadata. Used to gate the optional
+// extra photo slide: a loose match (e.g. an aerial "Tour Eiffel ... (65)" photo
+// for subject "Eiffel 65") is fine as a headline backdrop but wrong as a
+// standalone slide, so we skip the extra rather than show something unrelated.
+function matchesSubject(haystack, subjectNorm) {
+  return subjectNorm.length > 0 && haystack.includes(subjectNorm);
+}
+
+function metaText(page, info) {
+  return [
     page.title,
     info.extmetadata?.ObjectName?.value,
     info.extmetadata?.ImageDescription?.value,
@@ -32,12 +47,16 @@ function looksExcluded(page, info) {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function looksExcluded(text) {
   return EXCLUDE_PATTERN.test(text);
 }
 
 // Filter the raw search pages down to usable, unused, on-topic photos and
-// return them best-resolution first. Callers take rank[0] for a single pick or
-// a slice for multiple distinct photos of the same subject.
+// return them in Commons' own relevance order (via each result's `index`).
+// Sorting by resolution instead — as this once did — throws away relevance and
+// surfaces big but unrelated images (e.g. a high-res statue for "Carl Cox").
 function rankImages(pages, usedUrls) {
   const candidates = [];
   for (const page of Object.values(pages)) {
@@ -50,7 +69,8 @@ function rankImages(pages, usedUrls) {
     if (!PERMISSIVE_LICENSE.test(license)) continue;
 
     if (usedUrls.has(info.descriptionurl)) continue;
-    if (looksExcluded(page, info)) continue;
+    const text = metaText(page, info);
+    if (looksExcluded(text)) continue;
 
     const credit =
       stripHtml(info.extmetadata?.Artist?.value) ||
@@ -58,6 +78,7 @@ function rankImages(pages, usedUrls) {
       "Wikimedia Commons";
 
     candidates.push({
+      index: page.index ?? Number.MAX_SAFE_INTEGER,
       url: info.thumburl || info.url,
       mime: info.mime,
       width: info.thumbwidth || info.width,
@@ -65,9 +86,10 @@ function rankImages(pages, usedUrls) {
       credit,
       license,
       descriptionUrl: info.descriptionurl,
+      haystack: normalize(text),
     });
   }
-  candidates.sort((a, b) => b.width * b.height - a.width * a.height);
+  candidates.sort((a, b) => a.index - b.index);
   return candidates;
 }
 
@@ -110,13 +132,21 @@ export async function fetchCommonsPhoto(subject, usedUrls = new Set()) {
 }
 
 /**
- * Like fetchCommonsPhoto, but returns up to `limit` distinct photos of the
- * subject, best-resolution first — used to pull a second image for an extra
- * in-carousel photo slide when the subject is well documented. Returns fewer
- * (or none) when the subject doesn't have that many quality photos on Commons.
+ * Returns the best cover photo of the subject plus, when available, one extra
+ * photo for a mid-carousel slide. The cover is the top-ranked result (loose
+ * match is fine, since the headline overlays it). The extra photo is held to a
+ * stricter bar: it must clearly be about the subject (every significant token
+ * of the subject name present in its metadata), because it stands on its own as
+ * a full-bleed slide. When nothing beyond the cover clearly matches, only the
+ * cover is returned and no extra slide is added.
  */
-export async function fetchCommonsPhotos(subject, usedUrls = new Set(), limit = 2) {
+export async function fetchCommonsPhotos(subject, usedUrls = new Set()) {
   const pages = await searchCommons(subject);
   if (!pages) return [];
-  return rankImages(pages, usedUrls).slice(0, limit);
+  const ranked = rankImages(pages, usedUrls);
+  if (ranked.length === 0) return [];
+
+  const subjectNorm = normalize(subject);
+  const extra = ranked.slice(1).find((c) => matchesSubject(c.haystack, subjectNorm));
+  return extra ? [ranked[0], extra] : [ranked[0]];
 }

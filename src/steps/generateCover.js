@@ -121,7 +121,7 @@ export async function generateCover(fact, outDir) {
       // Pull up to two distinct photos: the first is the cover, the second (if
       // the subject is well documented enough to have one) becomes an extra
       // full-bleed slide in the middle of the carousel.
-      const photos = await fetchCommonsPhotos(photoSubject, usedCommonsPhotoUrls(), 2);
+      const photos = await fetchCommonsPhotos(photoSubject, usedCommonsPhotoUrls());
       if (photos.length > 0) {
         const [coverPhoto, extra] = photos;
         console.log(`[generateCover] using Wikimedia Commons photo of "${photoSubject}" (${coverPhoto.license})`);
