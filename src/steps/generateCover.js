@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
 import { recordUsedCommonsPhoto, usedCommonsPhotoUrls } from "../db.js";
-import { fetchCommonsPhoto } from "./fetchCommonsPhoto.js";
+import { fetchCommonsPhotos } from "./fetchCommonsPhoto.js";
 
 const XAI_IMAGES_URL = "https://api.x.ai/v1/images/generations";
 
@@ -31,15 +31,16 @@ function localCover(imagePath, outDir) {
   return { path: file, mime };
 }
 
-async function downloadCommonsPhoto(photo, outDir) {
+async function downloadCommonsPhoto(photo, outDir, basename = "cover-raw") {
   const res = await fetch(photo.url);
   if (!res.ok) throw new Error(`Failed to download Commons photo: ${res.status}`);
   const ext = photo.mime === "image/png" ? ".png" : ".jpg";
-  const file = path.join(outDir, `cover-raw${ext}`);
+  const file = path.join(outDir, `${basename}${ext}`);
   fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
   return {
     path: file,
     mime: photo.mime,
+    credit: photo.credit,
     attribution: `Photo: ${photo.credit} / Wikimedia Commons (${photo.license})`,
   };
 }
@@ -117,11 +118,21 @@ export async function generateCover(fact, outDir) {
     fact.image_subject || (fact.fact_type === "artist_specific" ? fact.artist_name : null);
   if (!config.mockMode && photoSubject) {
     try {
-      const photo = await fetchCommonsPhoto(photoSubject, usedCommonsPhotoUrls());
-      if (photo) {
-        console.log(`[generateCover] using Wikimedia Commons photo of "${photoSubject}" (${photo.license})`);
-        recordUsedCommonsPhoto(photo.descriptionUrl, photoSubject);
-        return await downloadCommonsPhoto(photo, outDir);
+      // Pull up to two distinct photos: the first is the cover, the second (if
+      // the subject is well documented enough to have one) becomes an extra
+      // full-bleed slide in the middle of the carousel.
+      const photos = await fetchCommonsPhotos(photoSubject, usedCommonsPhotoUrls(), 2);
+      if (photos.length > 0) {
+        const [coverPhoto, extra] = photos;
+        console.log(`[generateCover] using Wikimedia Commons photo of "${photoSubject}" (${coverPhoto.license})`);
+        recordUsedCommonsPhoto(coverPhoto.descriptionUrl, photoSubject);
+        const cover = await downloadCommonsPhoto(coverPhoto, outDir);
+        if (extra) {
+          console.log(`[generateCover] second Commons photo of "${photoSubject}" available — adding extra photo slide`);
+          recordUsedCommonsPhoto(extra.descriptionUrl, photoSubject);
+          cover.extraPhoto = await downloadCommonsPhoto(extra, outDir, "extra-raw");
+        }
+        return cover;
       }
       console.log(`[generateCover] no unused Commons photo for "${photoSubject}" — falling back to AI generation`);
     } catch (err) {

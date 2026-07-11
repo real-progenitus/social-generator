@@ -49,8 +49,11 @@ export async function runPipeline() {
   const cover = await generateCover(fact, outDir);
   const slidePaths = await renderSlides(fact, cover, outDir);
   // Commons photos require attribution (CC BY / CC BY-SA) — fold it into the
-  // caption so it ships with the post rather than only living in logs.
-  const caption = cover.attribution ? `${fact.caption}\n\n${cover.attribution}` : fact.caption;
+  // caption so it ships with the post rather than only living in logs. The
+  // cover and the optional extra photo slide may each carry a credit; dedupe
+  // in case they came from the same author.
+  const credits = [...new Set([cover.attribution, cover.extraPhoto?.attribution].filter(Boolean))];
+  const caption = credits.length > 0 ? `${fact.caption}\n\n${credits.join("\n")}` : fact.caption;
   updatePost(postId, {
     status: "rendered",
     cover_path: cover.path,
