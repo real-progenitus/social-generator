@@ -21,6 +21,7 @@
     "@anthropic-ai/sdk": "^0.110.0",
     "better-sqlite3": "^12.11.1",
     "dotenv": "^17.4.2",
-    "puppeteer": "^25.3.0"
+    "puppeteer": "^25.3.0",
+    "sharp": "^0.35.3"
   }
 }

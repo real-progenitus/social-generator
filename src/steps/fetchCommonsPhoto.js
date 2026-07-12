@@ -1,8 +1,26 @@
+import sharp from "sharp";
 import { config } from "../config.js";
 
 const COMMONS_API = "https://commons.wikimedia.org/w/api.php";
 const MIN_DIMENSION = 700;
 const REQUEST_WIDTH = 1600;
+const COMMONS_UA = `social-generator/1.0 (Instagram carousel bot; ${config.postHandle})`;
+
+// Laplacian-variance blur detection (a standard focus-sharpness measure:
+// convolve with a Laplacian kernel, then take the variance of the result —
+// crisp edges produce high-magnitude responses, a soft/blurry image produces
+// a flat one). Resized to a fixed width first so the score reflects actual
+// detail rather than just pixel count — otherwise a bigger image would
+// score higher than a smaller one of identical sharpness.
+const LAPLACIAN_KERNEL = [0, 1, 0, 1, -4, 1, 0, 1, 0];
+const SHARPNESS_SAMPLE_WIDTH = 600;
+// Deliberately not an absolute pass/fail cutoff: tested against real Commons
+// photos, a fixed threshold doesn't cleanly separate blurry from fine (a
+// blurry livestream-frame-grab scored in the same range as several clearly
+// acceptable press photos of other artists). What the score IS reliable for
+// is relative ranking within one subject's own candidate pool, so callers
+// re-rank by this instead of trusting Commons' relevance order for quality.
+const MAX_CANDIDATES_TO_SCORE = 8;
 
 // Commons hosts only freely-licensed or public-domain media, but we check the
 // license string anyway rather than trust that blindly.
@@ -118,41 +136,68 @@ async function searchCommons(subject) {
     iiurlwidth: String(REQUEST_WIDTH),
   }).toString();
 
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": `social-generator/1.0 (Instagram carousel bot; ${config.postHandle})`,
-    },
-  });
+  const res = await fetch(url, { headers: { "User-Agent": COMMONS_UA } });
   if (!res.ok) throw new Error(`Wikimedia Commons search failed: ${res.status}`);
 
   const json = await res.json();
   return json.query?.pages ?? null;
 }
 
-/**
- * Look up a freely-licensed photo of a subject (artist, venue, or festival)
- * on Wikimedia Commons, skipping any file already recorded as used
- * (`usedUrls`, keyed by descriptionUrl) so the same post subject doesn't get
- * the same cover twice. Returns null if nothing unused turns up (caller
- * falls back to AI art).
- */
-export async function fetchCommonsPhoto(subject, usedUrls = new Set()) {
-  const pages = await searchCommons(subject);
-  if (!pages) return null;
-  return rankImages(pages, usedUrls)[0] ?? null;
+async function sharpnessScore(url) {
+  const res = await fetch(url, { headers: { "User-Agent": COMMONS_UA } });
+  if (!res.ok) throw new Error(`sharpness check fetch failed: ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const { data } = await sharp(buffer)
+    .resize({ width: SHARPNESS_SAMPLE_WIDTH, withoutEnlargement: true })
+    .grayscale()
+    .convolve({ width: 3, height: 3, kernel: LAPLACIAN_KERNEL })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) sum += data[i];
+  const mean = sum / data.length;
+  let variance = 0;
+  for (let i = 0; i < data.length; i++) {
+    const d = data[i] - mean;
+    variance += d * d;
+  }
+  return variance / data.length;
+}
+
+// Scores the top relevance-ranked candidates and returns them sharpest-first.
+// Capped rather than scoring the whole pool — this downloads each candidate's
+// full image to analyze it, so an unbounded pool would mean an unbounded
+// number of extra Commons fetches for subjects with many hits. A download or
+// decode failure just drops that candidate rather than aborting the pick.
+async function bySharpness(candidates) {
+  const scored = [];
+  for (const c of candidates.slice(0, MAX_CANDIDATES_TO_SCORE)) {
+    try {
+      scored.push({ ...c, sharpness: await sharpnessScore(c.url) });
+    } catch (err) {
+      console.warn(`[fetchCommonsPhoto] sharpness check failed for ${c.url}: ${err.message}`);
+    }
+  }
+  scored.sort((a, b) => b.sharpness - a.sharpness);
+  return scored;
 }
 
 /**
  * Returns the best cover photo of the subject plus, when available, one extra
- * photo for a mid-carousel slide. Both are held to the same bar: the subject
- * name must appear in the file's title or Commons' own "ObjectName" field, not
- * merely a category/description mention. Plain relevance search alone isn't
- * enough — Commons' own ranking can surface photos whose only connection to
- * the subject is a shared word in categories or descriptions (e.g. "Kraftwerk"
- * is also the German word for "power station", so a literal power plant photo
- * can outrank real photos of the band). When no candidate clears that bar,
- * fall back to Commons' top overall result as the cover with no extra slide,
- * rather than returning nothing.
+ * photo for a mid-carousel slide. Both are held to the same relevance bar:
+ * the subject name must appear in the file's title or Commons' own
+ * "ObjectName" field, not merely a category/description mention. Plain
+ * relevance search alone isn't enough — Commons' own ranking can surface
+ * photos whose only connection to the subject is a shared word in categories
+ * or descriptions (e.g. "Kraftwerk" is also the German word for "power
+ * station", so a literal power plant photo can outrank real photos of the
+ * band), and separately, relevance order says nothing about photo quality (a
+ * blurry livestream frame-grab can rank above a sharp press photo of the same
+ * subject). So candidates are first filtered to those actually matching the
+ * subject, then re-ranked by sharpness rather than trusting relevance order
+ * for the final pick. When no candidate clears the subject-match bar, fall
+ * back to Commons' top overall (still sharpness-ranked) result as the cover
+ * with no extra slide, rather than returning nothing.
  */
 export async function fetchCommonsPhotos(subject, usedUrls = new Set()) {
   const pages = await searchCommons(subject);
@@ -162,7 +207,15 @@ export async function fetchCommonsPhotos(subject, usedUrls = new Set()) {
 
   const subjectNorm = normalize(subject);
   const matching = ranked.filter((c) => matchesSubject(c.titleHaystack, subjectNorm));
-  const cover = matching[0] ?? ranked[0];
-  const extra = matching.find((c) => c !== cover);
-  return extra ? [cover, extra] : [cover];
+
+  if (matching.length > 0) {
+    const sharpest = await bySharpness(matching);
+    if (sharpest.length === 0) return [];
+    const cover = sharpest[0];
+    const extra = sharpest.find((c) => c !== cover);
+    return extra ? [cover, extra] : [cover];
+  }
+
+  const sharpest = await bySharpness(ranked);
+  return sharpest.length > 0 ? [sharpest[0]] : [];
 }
