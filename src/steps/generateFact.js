@@ -18,6 +18,10 @@ const CONTENT_PILLARS = {
     "A specific event or shift that changed a scene or the culture around electronic music, and why it mattered beyond the moment itself.",
   artist_trivia:
     "A surprising, lesser-known fact about a major electronic act: something most fans of the genre wouldn't already know.",
+  recent_news:
+    "Something genuinely happening in electronic music right now, not history: a fresh festival lineup or set " +
+    "announcement, a viral clip or moment, a new release or collab making noise, a chart shift, or breaking artist " +
+    "news/controversy from the last few weeks.",
 };
 
 // Em dashes / double hyphens read as an obvious AI tell — strip them even if
@@ -106,12 +110,23 @@ const FACT_SCHEMA = {
   additionalProperties: false,
 };
 
+// Unlike the 139 fixed seeds in topics.json, this isn't a specific topic
+// string to research — it tells generateFact() to search live for whatever's
+// actually happening right now, the same open-discovery approach
+// generateFoodContent.js uses instead of a seed list. Its base weight is
+// deliberately not 1.0: with 139 individual seeds each weighted 1.0, a weight
+// of 1.0 would make this whole pillar ~139x less likely to come up than a
+// single seed. 34.75 against a weight-139 pool of seeds gives it ~20% of runs.
+const RECENT_NEWS_TOPIC = { topic: "recent_news", kind: "recent_news" };
+const RECENT_NEWS_BASE_WEIGHT = 34.75;
+
 function pickTopic() {
   const { topics } = JSON.parse(fs.readFileSync(topicsFile, "utf8"));
   const weights = getTopicWeights();
-  const weighted = topics.map((t) => ({
+  const pool = [...topics, RECENT_NEWS_TOPIC];
+  const weighted = pool.map((t) => ({
     ...t,
-    weight: weights[t.topic] ?? 1.0,
+    weight: weights[t.topic] ?? (t.kind === "recent_news" ? RECENT_NEWS_BASE_WEIGHT : 1.0),
   }));
   const total = weighted.reduce((sum, t) => sum + t.weight, 0);
   let roll = Math.random() * total;
@@ -144,7 +159,10 @@ const MOCK_FACT = {
 // Real web search grounds each fact in sources at generation time, which
 // replaces the old separate fact-check call — the generator can only state what
 // it actually found. Supported on claude-sonnet-5 (the configured model).
-const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 4 };
+// max_uses bumped from 4: the recent_news pillar needs a discovery search
+// (what's trending right now) before it can even settle on a subject to
+// research, the same two-phase search generateFoodContent.js budgets 6 for.
+const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 6 };
 
 /**
  * Generate a fact + slide copy via the Claude API, grounded in a live web
@@ -171,8 +189,9 @@ export async function generateFact() {
     tools: [WEB_SEARCH_TOOL],
     system:
       "You are the researcher-copywriter for an Instagram page that posts one well-sourced electronic music fact per day as a carousel. " +
-      "The page covers four content pillars: performance moments from big names, controversial innovations in music, " +
-      "culture-defining moments, and random trivia about big bands/artists, always within electronic music. " +
+      "The page covers five content pillars: performance moments from big names, controversial innovations in music, " +
+      "culture-defining moments, random trivia about big bands/artists, and what's happening right now in the scene, " +
+      "always within electronic music. " +
       "This account covers electronic music broadly, house and techno included, not just mainstream pop-EDM crossover " +
       "acts: only feature artists, venues, festivals, and events that a casual electronic music fan would already " +
       "recognize by name (think Daft Punk, Tomorrowland, Ibiza, Berghain, David Guetta, but equally Jeff Mills, " +
@@ -195,8 +214,14 @@ export async function generateFact() {
       {
         role: "user",
         content:
-          `Topic seed for today: "${topic.topic}"\n` +
-          `Content pillar: ${topic.kind} — ${CONTENT_PILLARS[topic.kind]}\n\n` +
+          (topic.kind === "recent_news"
+            ? `Content pillar: recent_news — ${CONTENT_PILLARS.recent_news}\n\n` +
+              "First, search the web for what's genuinely happening in electronic music right now (the last few " +
+              "weeks): festival lineup or set announcements, viral clips/moments, new releases or collabs making " +
+              "noise, chart shifts, breaking artist news. Do not rely on memory for what's current. Pick the single " +
+              "most compelling story you find.\n\n"
+            : `Topic seed for today: "${topic.topic}"\n` +
+              `Content pillar: ${topic.kind} — ${CONTENT_PILLARS[topic.kind]}\n\n`) +
           `Search the web to research this topic, then produce one interesting, verifiable fact with carousel copy, matching the content pillar above. Base every claim on the sources you find.\n` +
           `If the fact is fundamentally about one artist or group, set fact_type to "artist_specific" and fill artist_name; otherwise use "generic" with artist_name null.\n\n` +
           `Already-posted facts — do NOT repeat or closely paraphrase any of these:\n${usedList}`,
@@ -214,6 +239,11 @@ export async function generateFact() {
   const text = textBlocks[textBlocks.length - 1]?.text;
   if (!text) throw new Error("Claude returned no text content for fact generation");
   const fact = JSON.parse(text);
+  // Bucket by pillar, not by the live-discovered story (which is different
+  // every run) — same reasoning as generateFoodContent.js's content-type
+  // bucketing: analytics.js's engagement feedback loop needs a stable key to
+  // nudge, and "recent_news" is that key regardless of which story ran today.
+  if (topic.kind === "recent_news") fact.topic = "recent_news";
 
   if (fact.slides.length < 4 || fact.slides.length > 6) {
     throw new Error(
