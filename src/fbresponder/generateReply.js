@@ -84,7 +84,15 @@ export async function generateReply({ eventType, content, postContext, fromName,
   const response = await client.messages.create({
     model: config.claudeModel,
     max_tokens: 400,
-    system: SYSTEM_PROMPT,
+    // Classification + short templated reply, not a reasoning task — skip
+    // thinking so the 400-token budget goes entirely to the reply instead of
+    // competing with adaptive thinking (on by default for claude-sonnet-5).
+    // No output_config.effort here: claude-haiku-4-5 (the model this bot
+    // actually runs on) rejects that param with a 400.
+    thinking: { type: "disabled" },
+    // SYSTEM_PROMPT is static and reused on every comment/DM webhook call —
+    // cache it instead of paying full input price each time.
+    system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: contextLines }],
   });
 
