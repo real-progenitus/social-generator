@@ -61,14 +61,12 @@ const RECIPE_SCHEMA = {
     ingredients: {
       type: "array",
       items: { type: "string" },
-      maxItems: 10,
-      description: "6 to 10 ingredient lines with quantities, e.g. '1 cup rolled oats'. Hard cap at 10 — simplify or combine rather than exceed it.",
+      description: "6 to 10 ingredient lines with quantities, e.g. '1 cup rolled oats'. HARD CAP: never output more than 10 — simplify or combine rather than exceed it.",
     },
     steps: {
       type: "array",
       items: { type: "string" },
-      maxItems: 8,
-      description: "4 to 8 short numbered instructions, each 1-2 sentences, real food-safe technique.",
+      description: "4 to 8 short numbered instructions, each 1-2 sentences, real food-safe technique. HARD CAP: never output more than 8.",
     },
     health_note: {
       type: "string",
@@ -118,8 +116,7 @@ const TRIVIA_SCHEMA = {
     slides: {
       type: "array",
       items: { type: "string" },
-      maxItems: 3,
-      description: "2 to 3 short text blocks for the carousel body, each 1-3 sentences, standalone. Keep it tight — pick the single most surprising angle rather than a long list of facts.",
+      description: "2 to 3 short text blocks for the carousel body, each 1-3 sentences, standalone. HARD CAP: never output more than 3. Keep it tight — pick the single most surprising angle rather than a long list of facts.",
     },
     source_note: {
       type: "string",
