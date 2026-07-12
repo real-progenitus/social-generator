@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { getTopicWeights, recentUsedFacts } from "../db.js";
+import { createWithSearch } from "../lib/anthropicSearch.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const topicsFile = path.join(here, "..", "..", "data", "topics.json");
@@ -144,22 +145,6 @@ const MOCK_FACT = {
 // replaces the old separate fact-check call — the generator can only state what
 // it actually found. Supported on claude-sonnet-5 (the configured model).
 const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 4 };
-
-// A server-tool turn can stop with `pause_turn` if the search loop hits its
-// iteration cap; re-send with the assistant turn appended so it can finish.
-async function createWithSearch(client, params) {
-  let resp = await client.messages.create(params);
-  let guard = 0;
-  while (resp.stop_reason === "pause_turn" && guard < 6) {
-    guard++;
-    params = {
-      ...params,
-      messages: [...params.messages, { role: "assistant", content: resp.content }],
-    };
-    resp = await client.messages.create(params);
-  }
-  return resp;
-}
 
 /**
  * Generate a fact + slide copy via the Claude API, grounded in a live web

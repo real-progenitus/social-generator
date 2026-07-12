@@ -1,11 +1,31 @@
 import path from "node:path";
 import { config, requireConfig } from "./config.js";
 import { createPost, recordUsedFact, updatePost } from "./db.js";
-import { generateCover } from "./steps/generateCover.js";
-import { generateFact } from "./steps/generateFact.js";
 import { publishPost } from "./steps/publish.js";
-import { renderSlides } from "./steps/renderSlides.js";
 import { sendForReview } from "./steps/review.js";
+
+// Each account's generate/cover/render implementations live in their own
+// sibling files (see src/steps/generateFoodContent.js etc.) and are loaded
+// dynamically, never statically imported side by side — renderSlides.js and
+// renderFoodSlides.js each read a module-top-level logo asset, so a static
+// import of both would make a missing food-logo.png crash the music pipeline
+// even though it never calls into that file.
+async function loadAccountSteps() {
+  if (config.account === "food") {
+    const [{ generateFoodContent }, { generateFoodCover }, { renderFoodSlides }] = await Promise.all([
+      import("./steps/generateFoodContent.js"),
+      import("./steps/generateFoodCover.js"),
+      import("./steps/renderFoodSlides.js"),
+    ]);
+    return { generateContent: generateFoodContent, generateCoverImage: generateFoodCover, renderSlideImages: renderFoodSlides };
+  }
+  const [{ generateFact }, { generateCover }, { renderSlides }] = await Promise.all([
+    import("./steps/generateFact.js"),
+    import("./steps/generateCover.js"),
+    import("./steps/renderSlides.js"),
+  ]);
+  return { generateContent: generateFact, generateCoverImage: generateCover, renderSlideImages: renderSlides };
+}
 
 /**
  * Daily pipeline:
@@ -16,13 +36,16 @@ import { sendForReview } from "./steps/review.js";
  * live web search, and the Telegram approval step is the final human gate.
  */
 export async function runPipeline() {
+  console.log(`[pipeline] account=${config.account} handle=${config.postHandle}`);
   if (!config.mockMode) {
     const required = ["anthropicApiKey"];
     if (!config.localCoverImage) required.push("xaiApiKey");
     requireConfig(required);
   }
 
-  const fact = await generateFact();
+  const { generateContent, generateCoverImage, renderSlideImages } = await loadAccountSteps();
+
+  const fact = await generateContent();
   console.log(`[pipeline] generated: "${fact.headline}"`);
 
   const postId = createPost(fact);
@@ -34,8 +57,8 @@ export async function runPipeline() {
   recordUsedFact(fact);
 
   const outDir = path.join(config.outputDir, `post-${postId}`);
-  const cover = await generateCover(fact, outDir);
-  const slidePaths = await renderSlides(fact, cover, outDir);
+  const cover = await generateCoverImage(fact, outDir);
+  const slidePaths = await renderSlideImages(fact, cover, outDir);
   // Commons photos require attribution (CC BY / CC BY-SA) — fold it into the
   // caption so it ships with the post rather than only living in logs. The
   // cover and the optional extra photo slide may each carry a credit; dedupe

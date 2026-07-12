@@ -38,6 +38,10 @@ export const config = {
   postHandle: process.env.POST_HANDLE ?? "@electronic.music.facts",
 
   mockMode: bool(process.env.MOCK_MODE, false),
+
+  // "music" (default, Bass Vault) or "food" (bitemeweekly) — selects which
+  // generate/cover/render step implementations pipeline.js loads.
+  account: process.env.ACCOUNT ?? "music",
 };
 
 export function requireConfig(keys) {
