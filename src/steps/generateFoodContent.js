@@ -116,7 +116,7 @@ const TRIVIA_SCHEMA = {
     slides: {
       type: "array",
       items: { type: "string" },
-      description: "4 to 6 short text blocks for the carousel body, each 1-3 sentences, standalone.",
+      description: "2 to 3 short text blocks for the carousel body, each 1-3 sentences, standalone. Keep it tight — pick the single most surprising angle rather than a long list of facts.",
     },
     source_note: {
       type: "string",
@@ -187,9 +187,7 @@ const MOCK_TRIVIA = {
   trend_source: "Fermented foods and gut-health content are consistently trending across food and wellness media.",
   slides: [
     "Kimchi has been made in Korea for over a thousand years, but for most of that history it had no chili in it at all.",
-    "Chili peppers arrived in Korea from the Americas only in the 16th and 17th centuries, brought by Portuguese and Japanese traders.",
-    "Before that, kimchi was typically a salted, non-spicy pickled vegetable dish, closer to what's now called baek-kimchi (white kimchi).",
-    "Red, chili-forward kimchi as most people know it today didn't become the dominant style until the 18th and 19th centuries.",
+    "Chili peppers only arrived in Korea in the 16th and 17th centuries, brought by Portuguese and Japanese traders. Before that, kimchi was a salted, non-spicy pickle closer to today's baek-kimchi (white kimchi).",
     "Modern kimchi is also a genuinely rich source of live probiotic cultures from its lacto-fermentation process, not just a flavor condiment.",
   ],
   source_note: "Korean food history references and USDA/nutrition-science coverage of fermented vegetable probiotics.",
@@ -211,8 +209,9 @@ const FOOD_SYSTEM_PROMPT =
   "your search results actually say, and drop or soften anything not clearly supported. Prefer reputable sources " +
   "(established food publications, registered-dietitian or nutrition-science sources, major news outlets, primary " +
   "food-history references) over random blogs. Never invent statistics, quotes, or studies.\n\n" +
-  "Write for a food-curious, health-conscious audience: concrete, appetizing, no filler. Never use em dashes or " +
-  "double hyphens (— or --) anywhere in the output; use periods, commas, colons, or parentheses instead.";
+  "Write for a food-curious, health-conscious audience: concrete, appetizing, no filler. Keep carousels short and " +
+  "punchy rather than exhaustive — a tight 3-4 slide read outperforms a long one. Never use em dashes or double " +
+  "hyphens (— or --) anywhere in the output; use periods, commas, colons, or parentheses instead.";
 
 /**
  * Generate one food post — either a healthy recipe or a food-trivia fact —
@@ -270,8 +269,8 @@ export async function generateFoodContent() {
       throw new Error("Recipe validation failed: fewer than 3 ingredients");
     if (!fact.steps || fact.steps.length < 2) throw new Error("Recipe validation failed: fewer than 2 steps");
   } else {
-    if (!fact.slides || fact.slides.length < 4 || fact.slides.length > 6)
-      throw new Error(`Trivia validation failed: expected 4-6 slides, got ${fact.slides?.length}`);
+    if (!fact.slides || fact.slides.length < 2 || fact.slides.length > 3)
+      throw new Error(`Trivia validation failed: expected 2-3 slides, got ${fact.slides?.length}`);
   }
   return sanitizeFood(fact);
 }
