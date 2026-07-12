@@ -137,7 +137,13 @@ export function startWebhookServer() {
       req.on("data", (c) => chunks.push(c));
       req.on("end", () => {
         const rawBody = Buffer.concat(chunks);
+        console.log(
+          `[fbresponder/webhook] POST received, ${rawBody.length} bytes, signature header ${
+            req.headers["x-hub-signature-256"] ? "present" : "MISSING"
+          }`,
+        );
         if (!verifySignature(rawBody, req.headers["x-hub-signature-256"])) {
+          console.error("[fbresponder/webhook] signature verification failed — rejecting");
           res.writeHead(403).end("invalid signature");
           return;
         }
