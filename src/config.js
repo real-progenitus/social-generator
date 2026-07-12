@@ -49,7 +49,11 @@ export const config = {
   facebookPageAccessToken: process.env.FB_PAGE_ACCESS_TOKEN ?? "",
   facebookAppSecret: process.env.FB_APP_SECRET ?? "",
   facebookWebhookVerifyToken: process.env.FB_WEBHOOK_VERIFY_TOKEN ?? "",
-  fbAutoReply: bool(process.env.FB_AUTO_REPLY, false),
+  // Independent so DMs (mostly low-risk redirect/FAQ) can go fully automatic
+  // without also removing the review gate on comments (which can touch
+  // ownership claims on specific lost/found items).
+  fbAutoReplyMessages: bool(process.env.FB_AUTO_REPLY_MESSAGES, false),
+  fbAutoReplyComments: bool(process.env.FB_AUTO_REPLY_COMMENTS, false),
   fbWebhookPort: Number(process.env.FB_WEBHOOK_PORT ?? 8791),
 };
 

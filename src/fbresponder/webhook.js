@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import { config } from "../config.js";
-import { createEvent, eventExists, getEvent, updateEvent } from "./db.js";
+import { createEvent, eventExists, getEvent, recentEventsFrom, updateEvent } from "./db.js";
 import { generateReply } from "./generateReply.js";
 import { fetchPostContext, replyToComment, sendMessengerMessage } from "./graph.js";
 import { notifyFbSent, sendForFbApproval } from "./review.js";
@@ -18,7 +18,9 @@ function verifySignature(rawBody, signatureHeader) {
 }
 
 async function routeGeneratedReply(event) {
-  if (config.fbAutoReply) {
+  const autoReply =
+    event.event_type === "message" ? config.fbAutoReplyMessages : config.fbAutoReplyComments;
+  if (autoReply) {
     try {
       if (event.event_type === "comment") {
         await replyToComment(event.platform_event_id, event.proposed_reply);
@@ -46,11 +48,13 @@ async function handleCommentChange(change) {
   if (fromId && fromId === config.facebookPageId) return; // our own reply, re-delivered
 
   const postContext = value.post_id ? await fetchPostContext(value.post_id) : "";
+  const history = recentEventsFrom(fromId, "comment");
   const proposedReply = await generateReply({
     eventType: "comment",
     content: value.message ?? "",
     postContext,
     fromName: value.from?.name,
+    history,
   });
 
   const eventId = createEvent({
@@ -73,7 +77,8 @@ async function handleMessagingEvent(messaging) {
   if (!text || !mid || messaging.message?.is_echo) return; // is_echo = our own sent message, re-delivered
   if (eventExists(mid)) return;
 
-  const proposedReply = await generateReply({ eventType: "message", content: text });
+  const history = recentEventsFrom(senderId, "message");
+  const proposedReply = await generateReply({ eventType: "message", content: text, history });
 
   const eventId = createEvent({
     platform_event_id: mid,
@@ -114,7 +119,8 @@ async function processPayload(body) {
  * verification handshake; POST verifies X-Hub-Signature-256 before trusting
  * the payload, acks immediately (Meta expects a fast response), then
  * generates a reply and either queues it for Telegram approval or sends it
- * directly when FB_AUTO_REPLY=true.
+ * directly when the relevant auto-reply flag is set (FB_AUTO_REPLY_MESSAGES
+ * / FB_AUTO_REPLY_COMMENTS, checked independently per event type).
  */
 export function startWebhookServer() {
   const server = http.createServer((req, res) => {

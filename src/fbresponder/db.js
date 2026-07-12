@@ -55,3 +55,22 @@ export function updateEvent(id, fields) {
 export function getEvent(id) {
   return db.prepare("SELECT * FROM fb_events WHERE id = ?").get(id);
 }
+
+// Recent turns with this sender, oldest first, for multi-turn context. Only
+// surfaces proposed_reply for rows the sender actually saw (status='sent') —
+// a rejected or still-pending proposal was never delivered, so presenting it
+// as something "we already said" would mislead the model.
+export function recentEventsFrom(fromId, eventType, limit = 6) {
+  if (!fromId) return [];
+  const rows = db
+    .prepare(
+      `SELECT content, proposed_reply, status FROM fb_events
+       WHERE from_id = ? AND event_type = ?
+       ORDER BY id DESC LIMIT ?`,
+    )
+    .all(fromId, eventType, limit);
+  return rows.reverse().map((r) => ({
+    content: r.content,
+    reply: r.status === "sent" ? r.proposed_reply : null,
+  }));
+}
