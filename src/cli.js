@@ -1,11 +1,4 @@
 #!/usr/bin/env node
-import { db } from "./db.js";
-import { runBatch, runPipeline } from "./pipeline.js";
-import { serveMedia } from "./serve.js";
-import { runAnalytics } from "./steps/analytics.js";
-import { publishPost } from "./steps/publish.js";
-import { pollApprovals } from "./steps/review.js";
-
 const [command, arg] = process.argv.slice(2);
 
 const USAGE = `Usage: node src/cli.js <command>
@@ -17,35 +10,53 @@ const USAGE = `Usage: node src/cli.js <command>
   analytics        Pull IG insights for recent posts and update topic weights
   serve            Serve the output/ dir over HTTP for the Instagram Graph API
   status           Show recent posts and their pipeline states
+  fb-bot           Run the Facebook comment/message webhook + approval bot (run as a service)
 `;
 
+// Every case imports its own dependencies lazily (dynamic import), scoped to
+// that case, rather than as static top-of-file imports. db.js and
+// fbresponder/db.js each open config.dbPath and run CREATE TABLE statements
+// as a side effect of being imported, so a static import of both would have
+// every command's process create the other domain's tables too (posts/
+// used_facts/etc in the fb-bot's DB, fb_events in the pipeline's DB). Mirrors
+// the same reasoning behind pipeline.js's dynamic per-account step loading.
 try {
   switch (command) {
     case "run": {
+      const { runPipeline } = await import("./pipeline.js");
       const id = await runPipeline();
       console.log(`Done. Post ID: ${id}`);
       break;
     }
     case "run-batch": {
+      const { runBatch } = await import("./pipeline.js");
       const count = arg ? Number(arg) : 3;
       await runBatch(count);
       break;
     }
-    case "poll":
+    case "poll": {
+      const { pollApprovals } = await import("./steps/review.js");
       await pollApprovals();
       break;
+    }
     case "publish": {
       if (!arg) throw new Error("Usage: node src/cli.js publish <postId>");
+      const { publishPost } = await import("./steps/publish.js");
       await publishPost(Number(arg));
       break;
     }
-    case "analytics":
+    case "analytics": {
+      const { runAnalytics } = await import("./steps/analytics.js");
       await runAnalytics();
       break;
-    case "serve":
+    }
+    case "serve": {
+      const { serveMedia } = await import("./serve.js");
       serveMedia();
       break;
+    }
     case "status": {
+      const { db } = await import("./db.js");
       const rows = db
         .prepare(
           `SELECT id, status, created_at,
@@ -60,6 +71,11 @@ try {
           console.log(`#${r.id}  [${r.status}]  ${r.created_at}  ${r.headline}`);
         }
       }
+      break;
+    }
+    case "fb-bot": {
+      const { startFbResponder } = await import("./fbresponder/main.js");
+      await startFbResponder();
       break;
     }
     default:

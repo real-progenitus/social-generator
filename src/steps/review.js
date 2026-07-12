@@ -2,23 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
 import { getPost, updatePost } from "../db.js";
+import { tg } from "../lib/telegram.js";
 import { runPipeline } from "../pipeline.js";
 import { publishPost } from "./publish.js";
-
-const API = (method) =>
-  `https://api.telegram.org/bot${config.telegramBotToken}/${method}`;
-
-async function tg(method, payload) {
-  const isForm = payload instanceof FormData;
-  const res = await fetch(API(method), {
-    method: "POST",
-    headers: isForm ? undefined : { "Content-Type": "application/json" },
-    body: isForm ? payload : JSON.stringify(payload),
-  });
-  const json = await res.json();
-  if (!json.ok) throw new Error(`Telegram ${method} failed: ${JSON.stringify(json)}`);
-  return json.result;
-}
 
 /**
  * Send the rendered carousel + fact text to the review chat with

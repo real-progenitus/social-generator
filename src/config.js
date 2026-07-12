@@ -42,6 +42,15 @@ export const config = {
   // "music" (default, Bass Vault) or "food" (bitemeweekly) — selects which
   // generate/cover/render step implementations pipeline.js loads.
   account: process.env.ACCOUNT ?? "music",
+
+  // Facebook Page comment/message auto-responder (fbresponder/) — unused by
+  // the content pipeline, defaults keep it inert for every other account.
+  facebookPageId: process.env.FB_PAGE_ID ?? "",
+  facebookPageAccessToken: process.env.FB_PAGE_ACCESS_TOKEN ?? "",
+  facebookAppSecret: process.env.FB_APP_SECRET ?? "",
+  facebookWebhookVerifyToken: process.env.FB_WEBHOOK_VERIFY_TOKEN ?? "",
+  fbAutoReply: bool(process.env.FB_AUTO_REPLY, false),
+  fbWebhookPort: Number(process.env.FB_WEBHOOK_PORT ?? 8791),
 };
 
 export function requireConfig(keys) {
