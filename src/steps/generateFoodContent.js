@@ -61,11 +61,15 @@ const RECIPE_SCHEMA = {
     ingredients: {
       type: "array",
       items: { type: "string" },
-      description: "6 to 12 ingredient lines with quantities, e.g. '1 cup rolled oats'.",
+      minItems: 5,
+      maxItems: 10,
+      description: "6 to 10 ingredient lines with quantities, e.g. '1 cup rolled oats'. Hard cap at 10 — simplify or combine rather than exceed it.",
     },
     steps: {
       type: "array",
       items: { type: "string" },
+      minItems: 3,
+      maxItems: 8,
       description: "4 to 8 short numbered instructions, each 1-2 sentences, real food-safe technique.",
     },
     health_note: {
@@ -116,6 +120,8 @@ const TRIVIA_SCHEMA = {
     slides: {
       type: "array",
       items: { type: "string" },
+      minItems: 2,
+      maxItems: 3,
       description: "2 to 3 short text blocks for the carousel body, each 1-3 sentences, standalone. Keep it tight — pick the single most surprising angle rather than a long list of facts.",
     },
     source_note: {
@@ -265,9 +271,10 @@ export async function generateFoodContent() {
   const fact = JSON.parse(text);
 
   if (fact.fact_type === "recipe") {
-    if (!fact.ingredients || fact.ingredients.length < 3)
-      throw new Error("Recipe validation failed: fewer than 3 ingredients");
-    if (!fact.steps || fact.steps.length < 2) throw new Error("Recipe validation failed: fewer than 2 steps");
+    if (!fact.ingredients || fact.ingredients.length < 3 || fact.ingredients.length > 10)
+      throw new Error(`Recipe validation failed: expected 3-10 ingredients, got ${fact.ingredients?.length}`);
+    if (!fact.steps || fact.steps.length < 2 || fact.steps.length > 8)
+      throw new Error(`Recipe validation failed: expected 2-8 steps, got ${fact.steps?.length}`);
   } else {
     if (!fact.slides || fact.slides.length < 2 || fact.slides.length > 3)
       throw new Error(`Trivia validation failed: expected 2-3 slides, got ${fact.slides?.length}`);
