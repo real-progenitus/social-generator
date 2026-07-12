@@ -24,7 +24,7 @@ npm run serve          # static server so the IG Graph API can fetch the PNGs
 |---|---|
 | `npm run pipeline` | One full run: fact → fact-check → cover → render → review queue (or direct publish when `REVIEW_REQUIRED=false`) |
 | `npm run pipeline:batch -- <n>` | Run the pipeline `n` times back to back (default 3) — one failed run doesn't stop the rest |
-| `npm run poll` | Long-polls Telegram for the ✅/❌ buttons; approval triggers the Instagram publish |
+| `npm run poll` | Long-polls Telegram for the ✅/❌ buttons and `/generate`/`/post` commands; approval triggers the Instagram publish |
 | `npm run publish-post -- <id>` | Manually publish a rendered/approved post |
 | `npm run analytics` | Pulls IG insights for recent posts and nudges topic weights (run weekly) |
 | `npm run serve` | Serves `output/` over HTTP (put behind a public reverse proxy; set `PUBLIC_MEDIA_BASE_URL`) |
