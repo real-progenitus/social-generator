@@ -32,7 +32,9 @@ function localCover(imagePath, outDir) {
 }
 
 async function downloadCommonsPhoto(photo, outDir, basename = "cover-raw") {
-  const res = await fetch(photo.url);
+  const res = await fetch(photo.url, {
+    headers: { "User-Agent": `social-generator/1.0 (Instagram carousel bot; ${config.postHandle})` },
+  });
   if (!res.ok) throw new Error(`Failed to download Commons photo: ${res.status}`);
   const ext = photo.mime === "image/png" ? ".png" : ".jpg";
   const file = path.join(outDir, `${basename}${ext}`);
@@ -51,28 +53,43 @@ async function downloadCommonsPhoto(photo, outDir, basename = "cover-raw") {
 // as obvious AI art. Ask for something a photographer could have shot, with
 // real artistic/editorial intent (composition, light, mood) rather than a
 // flat literal snapshot.
+// A wide shot asks the model to keep a whole stage/rig/room's worth of
+// objects, cables, and architecture consistent at once — exactly where image
+// models fall apart (mangled cables, duplicated/impossible gear, warped
+// perspective), which is what made the fallback covers read as obviously AI.
+// A tight close-up on one simple subject sidesteps that entirely.
 const NO_AI_LOOK =
   "Realistic photograph, not digital art or illustration. No text, no logos, no illustrated or " +
   "cartoon elements, no overlaid graphics, waveforms, or sound-wave visuals. Portrait orientation, " +
   "shot on a professional camera with intentional, artistic composition: dramatic natural light, " +
-  "meaningful framing, shallow depth of field, a genuine editorial/documentary-photography feel.";
+  "meaningful framing, a genuine editorial/documentary-photography feel. Extreme close-up or macro " +
+  "shot filling the frame with ONE simple, generic subject, not a wide establishing shot of a whole " +
+  "stage, rig, or room: a single hand on a single fader, one spinning record, one set of glowing " +
+  "synth knobs, one turntable needle on vinyl, one microphone. Shallow depth of field, softly " +
+  "blurred background.";
 
 function buildPrompt(fact) {
   if (fact.fact_type === "artist_specific" && fact.artist_name) {
     if (config.artistImageMode === "photoreal") {
       // Explicit opt-in only — see README §2.2 for the legal/platform risk.
       return (
-        `Artistic editorial photograph evoking the world of ${fact.artist_name}: stage, gear, and ` +
-        `atmosphere from their era of electronic music. Theme: ${fact.topic}. ${NO_AI_LOOK}`
+        `Extreme close-up editorial photograph evoking the world of ${fact.artist_name}: one small, ` +
+        `generic detail of gear or hands-on equipment from their era of electronic music, not a wide ` +
+        `stage or rig shot. Theme: ${fact.topic}. ${NO_AI_LOOK}`
       );
     }
     return (
-      `Artistic photograph of the gear, stage, and atmosphere associated with ${fact.artist_name}'s ` +
-      `era of electronic music: synthesizers, mixing decks, turntables, or an empty stage or venue. ` +
-      `No people, no faces, no human figures or silhouettes. Theme: ${fact.topic}. ${NO_AI_LOOK}`
+      `Extreme close-up photograph of one small, generic piece of gear associated with ${fact.artist_name}'s ` +
+      `era of electronic music: a hand on a mixer fader, a spinning vinyl record, a synthesizer's glowing ` +
+      `knobs, or a turntable needle on a record. No people, no faces, no human figures or silhouettes, no ` +
+      `wide stage or venue shot. Theme: ${fact.topic}. ${NO_AI_LOOK}`
     );
   }
-  return `Artistic photograph representing: ${fact.topic}. An authentic club, festival, or studio environment. ${NO_AI_LOOK}`;
+  return (
+    `Extreme close-up photograph of one small, generic detail representing: ${fact.topic}. A hand on a ` +
+    `mixer fader, a spinning record, glowing equipment knobs, or a close crop of club lighting, not a ` +
+    `wide club, festival, or studio establishing shot. ${NO_AI_LOOK}`
+  );
 }
 
 function mockCover(outDir) {

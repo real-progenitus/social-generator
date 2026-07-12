@@ -143,9 +143,23 @@ async function searchCommons(subject) {
   return json.query?.pages ?? null;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Small gap between each sequential candidate download — tested live against
+// production and a tight back-to-back burst of ~6-8 requests to
+// upload.wikimedia.org from this droplet's IP was enough to trip a 429 with
+// Retry-After: 600 (10 minutes), for the *entire* IP, not just this request.
+const SHARPNESS_REQUEST_DELAY_MS = 400;
+
 async function sharpnessScore(url) {
   const res = await fetch(url, { headers: { "User-Agent": COMMONS_UA } });
-  if (!res.ok) throw new Error(`sharpness check fetch failed: ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(`sharpness check fetch failed: ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   const buffer = Buffer.from(await res.arrayBuffer());
   const { data } = await sharp(buffer)
     .resize({ width: SHARPNESS_SAMPLE_WIDTH, withoutEnlargement: true })
@@ -171,12 +185,19 @@ async function sharpnessScore(url) {
 // decode failure just drops that candidate rather than aborting the pick.
 async function bySharpness(candidates) {
   const scored = [];
-  for (const c of candidates.slice(0, MAX_CANDIDATES_TO_SCORE)) {
+  const pool = candidates.slice(0, MAX_CANDIDATES_TO_SCORE);
+  for (let i = 0; i < pool.length; i++) {
+    const c = pool[i];
     try {
       scored.push({ ...c, sharpness: await sharpnessScore(c.url) });
     } catch (err) {
       console.warn(`[fetchCommonsPhoto] sharpness check failed for ${c.url}: ${err.message}`);
+      // A 429 means every subsequent request this run will fail the same way
+      // (it's an IP-wide, not per-URL, lockout) — stop rather than burn the
+      // rest of the pool (and worsen the lockout) on guaranteed failures.
+      if (err.status === 429) break;
     }
+    if (i < pool.length - 1) await sleep(SHARPNESS_REQUEST_DELAY_MS);
   }
   scored.sort((a, b) => b.sharpness - a.sharpness);
   return scored;
