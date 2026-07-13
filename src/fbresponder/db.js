@@ -21,10 +21,30 @@ db.exec(`
     content TEXT,
     post_context TEXT,
     proposed_reply TEXT,
+    -- 'photo_help' | 'other' — classified by generateReply(), used to decide
+    -- whether this exchange gets a proactive follow-up nudge.
+    topic TEXT,
+    -- null -> 'awaiting' (nudge due in an hour) -> 'nudge_sent' (waiting on
+    -- their reply) -> 'replied' (they answered; loop closed). Only ever set
+    -- on 'photo_help' DM rows — see followup.js.
+    followup_status TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
+
+// Idempotent column additions for upgrading an existing DB file — CREATE
+// TABLE IF NOT EXISTS above doesn't add columns to a table that already
+// exists from before `topic`/`followup_status` were introduced.
+for (const [column, type] of [
+  ["topic", "TEXT"],
+  ["followup_status", "TEXT"],
+]) {
+  const exists = db
+    .prepare("SELECT 1 FROM pragma_table_info('fb_events') WHERE name = ?")
+    .get(column);
+  if (!exists) db.exec(`ALTER TABLE fb_events ADD COLUMN ${column} ${type}`);
+}
 
 export function eventExists(platformEventId) {
   return !!db
@@ -36,10 +56,10 @@ export function createEvent(fields) {
   const info = db
     .prepare(
       `INSERT INTO fb_events
-         (platform_event_id, event_type, from_id, from_name, content, post_context, proposed_reply, status)
-       VALUES (@platform_event_id, @event_type, @from_id, @from_name, @content, @post_context, @proposed_reply, @status)`,
+         (platform_event_id, event_type, from_id, from_name, content, post_context, proposed_reply, topic, status)
+       VALUES (@platform_event_id, @event_type, @from_id, @from_name, @content, @post_context, @proposed_reply, @topic, @status)`,
     )
-    .run({ status: "pending_review", ...fields });
+    .run({ status: "pending_review", topic: null, ...fields });
   return info.lastInsertRowid;
 }
 
@@ -73,4 +93,35 @@ export function recentEventsFrom(fromId, eventType, limit = 6) {
     content: r.content,
     reply: r.status === "sent" ? r.proposed_reply : null,
   }));
+}
+
+// A prior 'photo_help' DM we sent a "did everything go ok?" nudge for, and
+// are still waiting to hear back from — used to detect that a fresh inbound
+// message is the reply closing that loop (triggers the promotion suggestion).
+export function findPendingNudge(fromId) {
+  if (!fromId) return null;
+  return db
+    .prepare(
+      `SELECT * FROM fb_events
+       WHERE from_id = ? AND followup_status = 'nudge_sent'
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get(fromId);
+}
+
+// 'photo_help' DMs we answered over an hour ago that are still awaiting a
+// nudge, where the sender hasn't sent anything else since (any newer row
+// from the same from_id means they already replied — skip those).
+export function findDueFollowUps(delayMinutes) {
+  return db
+    .prepare(
+      `SELECT * FROM fb_events e
+       WHERE e.event_type = 'message' AND e.topic = 'photo_help' AND e.status = 'sent'
+         AND e.followup_status = 'awaiting'
+         AND e.updated_at <= datetime('now', '-' || ? || ' minutes')
+         AND NOT EXISTS (
+           SELECT 1 FROM fb_events e2 WHERE e2.from_id = e.from_id AND e2.id > e.id
+         )`,
+    )
+    .all(delayMinutes);
 }

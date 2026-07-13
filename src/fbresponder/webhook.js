@@ -1,7 +1,14 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import { config } from "../config.js";
-import { createEvent, eventExists, getEvent, recentEventsFrom, updateEvent } from "./db.js";
+import {
+  createEvent,
+  eventExists,
+  findPendingNudge,
+  getEvent,
+  recentEventsFrom,
+  updateEvent,
+} from "./db.js";
 import { generateReply } from "./generateReply.js";
 import { fetchPostContext, replyToComment, sendMessengerMessage } from "./graph.js";
 import { notifyFbSent, sendForFbApproval } from "./review.js";
@@ -49,7 +56,7 @@ async function handleCommentChange(change) {
 
   const postContext = value.post_id ? await fetchPostContext(value.post_id) : "";
   const history = recentEventsFrom(fromId, "comment");
-  const proposedReply = await generateReply({
+  const { reply: proposedReply, topic } = await generateReply({
     eventType: "comment",
     content: value.message ?? "",
     postContext,
@@ -65,6 +72,7 @@ async function handleCommentChange(change) {
     content: value.message ?? "",
     post_context: postContext,
     proposed_reply: proposedReply,
+    topic,
   });
 
   await routeGeneratedReply(getEvent(eventId));
@@ -77,8 +85,19 @@ async function handleMessagingEvent(messaging) {
   if (!text || !mid || messaging.message?.is_echo) return; // is_echo = our own sent message, re-delivered
   if (eventExists(mid)) return;
 
+  // If we're waiting on a reply to a "did everything go ok?" nudge from this
+  // sender, this message closes that loop — the reply should suggest post
+  // promotion, and the nudge stops being "pending" either way (whether or
+  // not the topic is still photo_help, we don't want to re-nudge on it).
+  const pendingNudge = findPendingNudge(senderId);
+
   const history = recentEventsFrom(senderId, "message");
-  const proposedReply = await generateReply({ eventType: "message", content: text, history });
+  const { reply: proposedReply, topic } = await generateReply({
+    eventType: "message",
+    content: text,
+    history,
+    suggestPromotion: !!pendingNudge,
+  });
 
   const eventId = createEvent({
     platform_event_id: mid,
@@ -88,9 +107,19 @@ async function handleMessagingEvent(messaging) {
     content: text,
     post_context: null,
     proposed_reply: proposedReply,
+    topic,
   });
 
+  if (pendingNudge) updateEvent(pendingNudge.id, { followup_status: "replied" });
+
   await routeGeneratedReply(getEvent(eventId));
+
+  // Only schedule a follow-up once the answer has actually reached them —
+  // not while it's stuck pending Telegram review or if the send failed.
+  const finalEvent = getEvent(eventId);
+  if (!pendingNudge && topic === "photo_help" && finalEvent.status === "sent") {
+    updateEvent(eventId, { followup_status: "awaiting" });
+  }
 }
 
 async function processPayload(body) {
