@@ -45,14 +45,30 @@ async function routeGeneratedReply(event) {
   }
 }
 
+// New posts placed directly on the Page's own timeline by someone else (not
+// a comment on our content). Same "feed" webhook field as comments, but Meta
+// reports these with one of these `item` values instead of "comment", and no
+// comment_id. People often post their lost/found plea straight to the Page
+// wall instead of using the app — same misunderstanding as comments/DMs, so
+// it gets the same treatment: reply with a comment on their post.
+const PAGE_POST_ITEMS = new Set(["status", "photo", "video", "link", "note", "share"]);
+
 async function handleCommentChange(change) {
   const value = change.value ?? {};
-  if (value.item !== "comment" || value.verb !== "add") return;
+  if (value.verb !== "add") return;
 
-  const commentId = value.comment_id;
   const fromId = value.from?.id;
+  if (fromId && fromId === config.facebookPageId) return; // our own post/reply, re-delivered
+
+  if (value.item === "comment") return handleComment(value, fromId);
+  if (PAGE_POST_ITEMS.has(value.item) && value.post_id && !value.comment_id) {
+    return handlePagePost(value, fromId);
+  }
+}
+
+async function handleComment(value, fromId) {
+  const commentId = value.comment_id;
   if (!commentId || eventExists(commentId)) return;
-  if (fromId && fromId === config.facebookPageId) return; // our own reply, re-delivered
 
   // Photo/sticker-only comments (e.g. someone attaching extra pet photos as
   // follow-up comments) arrive as separate "add" events with no text. There's
@@ -78,6 +94,35 @@ async function handleCommentChange(change) {
     from_name: value.from?.name ?? null,
     content: message,
     post_context: postContext,
+    proposed_reply: proposedReply,
+    topic,
+  });
+
+  await routeGeneratedReply(getEvent(eventId));
+}
+
+async function handlePagePost(value, fromId) {
+  const postId = value.post_id;
+  if (eventExists(postId)) return;
+
+  const message = (value.message ?? "").trim();
+  if (!message) return; // photo/video-only post with no caption, nothing to reply to
+
+  const history = recentEventsFrom(fromId, "comment");
+  const { reply: proposedReply, topic } = await generateReply({
+    eventType: "comment",
+    content: message,
+    fromName: value.from?.name,
+    history,
+  });
+
+  const eventId = createEvent({
+    platform_event_id: postId,
+    event_type: "comment",
+    from_id: fromId ?? null,
+    from_name: value.from?.name ?? null,
+    content: message,
+    post_context: null,
     proposed_reply: proposedReply,
     topic,
   });
