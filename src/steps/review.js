@@ -43,6 +43,36 @@ export async function sendForReview(postId, fact, slidePaths) {
   console.log(`[review] post #${postId} sent to Telegram for approval`);
 }
 
+// Posts currently mid-publish, so a duplicate approve tap (e.g. from a second
+// poller instance) waits instead of triggering a second Instagram post.
+const publishing = new Set();
+
+async function doPublish(postId) {
+  if (publishing.has(postId)) {
+    await tg("sendMessage", {
+      chat_id: config.telegramChatId,
+      text: `⏳ Post #${postId} is already being published — please wait.`,
+    });
+    return;
+  }
+  publishing.add(postId);
+  try {
+    const mediaId = await publishPost(postId);
+    await tg("sendMessage", {
+      chat_id: config.telegramChatId,
+      text: `🚀 Post #${postId} published (IG media ${mediaId}).`,
+    });
+  } catch (err) {
+    updatePost(postId, { status: "failed", review_feedback: String(err) });
+    await tg("sendMessage", {
+      chat_id: config.telegramChatId,
+      text: `⚠️ Publish failed for post #${postId}: ${err.message}`,
+    });
+  } finally {
+    publishing.delete(postId);
+  }
+}
+
 async function handleCallback(cb) {
   const [action, idStr] = String(cb.data ?? "").split(":");
   const postId = Number(idStr);
@@ -54,25 +84,22 @@ async function handleCallback(cb) {
   };
 
   if (!post) return reply(`Post #${postId} not found.`);
+
+  // status is set to 'approved' before publishPost() runs, so a crash/restart
+  // mid-publish leaves it stuck here forever with no other recovery path —
+  // treat a re-approve as "retry the stuck publish" rather than ignoring it.
+  if (action === "approve" && post.status === "approved") {
+    await reply(`⏳ Post #${postId} was already approved but never published — retrying…`);
+    return doPublish(postId);
+  }
+
   if (post.status !== "pending_review")
     return reply(`Post #${postId} is '${post.status}', not pending review — ignoring.`);
 
   if (action === "approve") {
     updatePost(postId, { status: "approved" });
     await reply(`✅ Post #${postId} approved — publishing…`);
-    try {
-      const mediaId = await publishPost(postId);
-      await tg("sendMessage", {
-        chat_id: config.telegramChatId,
-        text: `🚀 Post #${postId} published (IG media ${mediaId}).`,
-      });
-    } catch (err) {
-      updatePost(postId, { status: "failed", review_feedback: String(err) });
-      await tg("sendMessage", {
-        chat_id: config.telegramChatId,
-        text: `⚠️ Publish failed for post #${postId}: ${err.message}`,
-      });
-    }
+    await doPublish(postId);
   } else if (action === "reject") {
     updatePost(postId, {
       status: "rejected",

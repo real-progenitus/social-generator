@@ -54,11 +54,18 @@ async function handleCommentChange(change) {
   if (!commentId || eventExists(commentId)) return;
   if (fromId && fromId === config.facebookPageId) return; // our own reply, re-delivered
 
+  // Photo/sticker-only comments (e.g. someone attaching extra pet photos as
+  // follow-up comments) arrive as separate "add" events with no text. There's
+  // nothing to reply to, and generating one anyway just spams Telegram with
+  // near-duplicate review cards where the model invents a reply from history.
+  const message = (value.message ?? "").trim();
+  if (!message) return;
+
   const postContext = value.post_id ? await fetchPostContext(value.post_id) : "";
   const history = recentEventsFrom(fromId, "comment");
   const { reply: proposedReply, topic } = await generateReply({
     eventType: "comment",
-    content: value.message ?? "",
+    content: message,
     postContext,
     fromName: value.from?.name,
     history,
@@ -69,7 +76,7 @@ async function handleCommentChange(change) {
     event_type: "comment",
     from_id: fromId ?? null,
     from_name: value.from?.name ?? null,
-    content: value.message ?? "",
+    content: message,
     post_context: postContext,
     proposed_reply: proposedReply,
     topic,
