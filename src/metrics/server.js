@@ -50,16 +50,17 @@ function bucketOf(ts, range) {
   return range === "24h" ? ts.slice(0, 13) + ":00" : ts.slice(0, 10);
 }
 
-function buildApiSummary(range) {
+function buildApiSummary(range, account) {
   const mod = RANGE_MODIFIER[range] ?? RANGE_MODIFIER["7d"];
+  const where = account ? "ts >= datetime('now', ?) AND account = ?" : "ts >= datetime('now', ?)";
   const rows = db
     .prepare(
       `SELECT ts, account, provider, model, operation, duration_ms,
               input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
               web_search_count, image_count, cost_usd, status
-       FROM api_calls WHERE ts >= datetime('now', ?) ORDER BY ts`,
+       FROM api_calls WHERE ${where} ORDER BY ts`,
     )
-    .all(mod);
+    .all(...(account ? [mod, account] : [mod]));
 
   const num = (v) => (typeof v === "number" ? v : 0);
 
@@ -142,9 +143,19 @@ function buildApiSummary(range) {
       account: r.account ?? "(unknown)",
       calls: 0,
       cost: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      webSearches: 0,
+      images: 0,
+      durations: [],
     }));
     acct.calls += 1;
     acct.cost += cost;
+    acct.inputTokens += num(r.input_tokens);
+    acct.outputTokens += num(r.output_tokens);
+    acct.webSearches += num(r.web_search_count);
+    acct.images += num(r.image_count);
+    if (r.duration_ms != null) acct.durations.push(r.duration_ms);
 
     const bkt = bump(series, bucketOf(r.ts, range), () => ({ bucket: bucketOf(r.ts, range), cost: 0, calls: 0 }));
     bkt.cost += cost;
@@ -162,7 +173,7 @@ function buildApiSummary(range) {
     byProvider: [...byProvider.values()].sort((a, b) => b.cost - a.cost),
     byModel: finalizeLatency([...byModel.values()]).sort((a, b) => b.cost - a.cost),
     byOperation: finalizeLatency([...byOperation.values()]).sort((a, b) => b.calls - a.calls),
-    byAccount: [...byAccount.values()].sort((a, b) => b.cost - a.cost),
+    byAccount: finalizeLatency([...byAccount.values()]).sort((a, b) => b.cost - a.cost),
     series: [...series.values()].sort((a, b) => (a.bucket < b.bucket ? -1 : 1)),
   };
 }
@@ -188,8 +199,23 @@ async function buildSystemSummary(range) {
   return { current, history, processes };
 }
 
-async function buildSummary(range) {
-  return { range, generatedAt: new Date().toISOString(), ...buildApiSummary(range), system: await buildSystemSummary(range) };
+async function buildSummary(range, account) {
+  const mod = RANGE_MODIFIER[range] ?? RANGE_MODIFIER["7d"];
+  const accounts = db
+    .prepare(
+      `SELECT DISTINCT account FROM api_calls
+       WHERE ts >= datetime('now', ?) AND account IS NOT NULL ORDER BY account`,
+    )
+    .all(mod)
+    .map((r) => r.account);
+  return {
+    range,
+    account: account ?? null,
+    accounts,
+    generatedAt: new Date().toISOString(),
+    ...buildApiSummary(range, account),
+    system: await buildSystemSummary(range),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +269,8 @@ export function serveMetrics() {
       }
       if (url.pathname === "/api/summary") {
         const range = url.searchParams.get("range") ?? "7d";
-        sendJson(res, 200, await buildSummary(RANGE_MODIFIER[range] ? range : "7d"));
+        const account = url.searchParams.get("account") || null;
+        sendJson(res, 200, await buildSummary(RANGE_MODIFIER[range] ? range : "7d", account));
         return;
       }
       res.writeHead(404).end("not found");

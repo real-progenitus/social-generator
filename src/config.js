@@ -52,6 +52,11 @@ export const config = {
   // generate/cover/render step implementations pipeline.js loads.
   account: process.env.ACCOUNT ?? "music",
 
+  // Human-facing service name used to label cost/usage metrics, so the
+  // dashboard reads bass__vault / bitemeweekly rather than the internal
+  // music/food. Derived from the post handle (each account's .env sets its own).
+  accountLabel: (process.env.POST_HANDLE ?? process.env.ACCOUNT ?? "music").replace(/^@/, ""),
+
   // Facebook Page comment/message auto-responder (fbresponder/) — unused by
   // the content pipeline, defaults keep it inert for every other account.
   facebookPageId: process.env.FB_PAGE_ID ?? "",

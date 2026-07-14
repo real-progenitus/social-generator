@@ -118,6 +118,7 @@
       <div class="sub" id="subtitle">Loading…</div>
     </div>
     <div class="controls">
+      <select class="icon-btn" id="account" title="Filter by service"><option value="">All services</option></select>
       <div class="ranges" id="ranges">
         <button data-range="24h">24h</button>
         <button data-range="7d">7d</button>
@@ -136,6 +137,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let range = "7d";
+let account = "";
 let timer = null;
 
 // ---- formatting -----------------------------------------------------------
@@ -233,6 +235,7 @@ function panel(title, inner, extra = "") {
 
 // ---- render ---------------------------------------------------------------
 function render(d) {
+  syncAccountOptions(d.accounts || []);
   const t = d.totals;
   const cacheTotal = t.cacheReadTokens + t.cacheCreationTokens;
   const errRate = t.calls ? (t.errors / t.calls) * 100 : 0;
@@ -261,7 +264,14 @@ function render(d) {
     <td>${fmtMs(m.avg)}</td><td>${fmtMs(m.p95)}</td><td>${fmtUsd(m.cost)}</td>
   </tr>`).join("") || `<tr><td colspan="8" class="empty">No calls in this range.</td></tr>`;
 
-  const acctRow = d.byAccount.map((a) => `<span class="pill">${esc(a.account)}: ${fmtUsd(a.cost)} · ${fmtInt(a.calls)}</span>`).join(" ");
+  const costByService = d.byAccount.map((a) => ({ label: a.account, value: a.cost, display: fmtUsd(a.cost) }));
+  const svcRows = d.byAccount.map((a) => `<tr>
+    <td>${esc(a.account)}</td><td>${fmtInt(a.calls)}</td>
+    <td>${fmtTokens(a.inputTokens)}</td><td>${fmtTokens(a.outputTokens)}</td>
+    <td>${fmtInt(a.webSearches)}</td><td>${fmtInt(a.images)}</td>
+    <td>${fmtMs(a.avg)}</td><td>${fmtUsd(a.cost)}</td>
+    <td>${t.cost ? ((a.cost / t.cost) * 100).toFixed(0) + "%" : "—"}</td>
+  </tr>`).join("") || `<tr><td colspan="9" class="empty">No calls in this range.</td></tr>`;
 
   // ---- system ----
   const sys = d.system || {};
@@ -288,9 +298,19 @@ function render(d) {
   $("app").innerHTML = `
     <h2>AI usage &amp; cost</h2>
     <div class="grid tiles">${tiles}</div>
-    ${acctRow ? `<div style="margin-top:12px">${acctRow}</div>` : ""}
 
-    <div class="grid panels" style="margin-top:12px">
+    <h2>Cost by service</h2>
+    ${panel("Cost by service", hbars(costByService))}
+    <div class="card" style="margin-top:12px">
+      <div class="panel-title">Service breakdown</div>
+      <div class="scroll"><table>
+        <thead><tr><th>Service</th><th>Calls</th><th>In tok</th><th>Out tok</th><th>Web</th><th>Img</th><th>Avg</th><th>Cost</th><th>Share</th></tr></thead>
+        <tbody>${svcRows}</tbody>
+      </table></div>
+    </div>
+
+    <h2>Breakdowns${d.account ? ` — ${esc(d.account)}` : ""}</h2>
+    <div class="grid panels">
       ${panel("Cost over time", vbars(costSeries, fmtUsd))}
       ${panel("Cost by model", hbars(costByModel))}
       ${panel("Calls by operation", hbars(callsByOp))}
@@ -305,7 +325,7 @@ function render(d) {
       </table></div>
     </div>
 
-    <h2>Droplet health</h2>
+    <h2>Droplet health <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted)">· whole droplet (not per-service)</span></h2>
     <div class="grid tiles">${sysTiles}</div>
     <div class="grid panels" style="margin-top:12px">
       ${panel("CPU & memory over time", sysTrend, sysLegend)}
@@ -341,12 +361,21 @@ function shortBucket(b) {
 // ---- data + wiring --------------------------------------------------------
 async function load() {
   try {
-    const res = await fetch(`/api/summary?range=${range}`);
+    const res = await fetch(`/api/summary?range=${range}${account ? `&account=${encodeURIComponent(account)}` : ""}`);
     if (!res.ok) throw new Error("HTTP " + res.status);
     render(await res.json());
   } catch (err) {
     $("app").innerHTML = `<div class="card err">Failed to load metrics: ${esc(err.message)}</div>`;
   }
+}
+
+function syncAccountOptions(accounts) {
+  const sel = $("account");
+  const html = ['<option value="">All services</option>']
+    .concat(accounts.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`))
+    .join("");
+  if (sel.dataset.sig !== html) { sel.innerHTML = html; sel.dataset.sig = html; }
+  sel.value = account;
 }
 
 function setRange(r) {
@@ -364,6 +393,7 @@ $("theme").addEventListener("click", () => {
   const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
 });
+$("account").addEventListener("change", (e) => { account = e.target.value; load(); });
 
 setRange("7d");
 timer = setInterval(load, 30_000);

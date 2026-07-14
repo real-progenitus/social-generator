@@ -181,7 +181,7 @@ export async function generateFact() {
       : "(none yet)";
 
   const response = await callClaude({
-    account: config.account,
+    account: config.accountLabel,
     operation: "generateFact",
     search: true,
     model: config.claudeModel,

@@ -167,7 +167,7 @@ export async function generateCover(fact, outDir) {
 
   const b64 = await generateGrokImage({
     prompt,
-    account: config.account,
+    account: config.accountLabel,
     operation: "cover",
   });
 

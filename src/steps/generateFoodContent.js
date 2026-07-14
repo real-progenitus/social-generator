@@ -234,7 +234,7 @@ export async function generateFoodContent() {
   const schema = contentType === "recipe" ? RECIPE_SCHEMA : TRIVIA_SCHEMA;
 
   const response = await callClaude({
-    account: config.account,
+    account: config.accountLabel,
     operation: "generateFoodContent",
     search: true,
     model: config.claudeModel,

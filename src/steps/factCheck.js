@@ -29,7 +29,7 @@ export async function factCheck(fact) {
   }
 
   const response = await callClaude({
-    account: config.account,
+    account: config.accountLabel,
     operation: "factCheck",
     model: config.claudeModel,
     max_tokens: 16000,

@@ -87,7 +87,7 @@ export async function generateFoodCover(fact, outDir) {
 
   const b64 = await generateGrokImage({
     prompt,
-    account: config.account,
+    account: config.accountLabel,
     operation: "foodCover",
   });
 
