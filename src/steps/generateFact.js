@@ -56,6 +56,7 @@ function sanitizeFact(fact) {
     source_note: clean(fact.source_note),
     caption: clean(fact.caption),
     image_mood: clean(fact.image_mood),
+    cover_subject: fact.cover_subject ? clean(fact.cover_subject) : fact.cover_subject,
   };
 }
 
@@ -108,6 +109,16 @@ const FACT_SCHEMA = {
         "generator when no real photo of the subject is available. Describe mood, era, and energy only: no artist, " +
         "venue, festival, or song names, and no other proper nouns.",
     },
+    cover_subject: {
+      type: "string",
+      description:
+        "A specific, iconic, photographable close-up subject for the cover image that represents THIS fact, described " +
+        "generically WITHOUT proper nouns and WITHOUT any recognizable real person's face. Prefer one concrete object, " +
+        "instrument, or piece of gear tied to the fact (e.g. 'a vintage silver bass synthesizer with chrome knobs', " +
+        "'a DJ's hand on a CDJ jog wheel under blue light', 'a stack of worn vinyl records', 'a smoke-filled beam of " +
+        "club light over a dark dancefloor'). Anonymous crowds, hands, or silhouettes are fine; never a real person's " +
+        "face or likeness, no logos, no text. 5-15 words.",
+    },
   },
   required: [
     "fact_type",
@@ -119,6 +130,7 @@ const FACT_SCHEMA = {
     "source_note",
     "caption",
     "image_mood",
+    "cover_subject",
   ],
   additionalProperties: false,
 };
@@ -168,6 +180,7 @@ const MOCK_FACT = {
   caption:
     "The bass synth nobody wanted became the sound of a genre. 🎛️ #acidhouse #tb303 #electronicmusic #housemusic #musichistory #synth #chicagohouse",
   image_mood: "gritty, underground, DIY ingenuity, a cheap discarded machine turned cult weapon",
+  cover_subject: "a vintage silver bass synthesizer with small chrome knobs on a dim studio surface",
 };
 
 // Real web search grounds each fact in sources at generation time, which
@@ -301,7 +314,10 @@ const JSON_SHAPE_INSTRUCTION =
   "because they render on a fixed card and longer text is cut off: the fact in detail, context, why it matters); " +
   "source_note (brief factual grounding, the kind of documentation this is known from, not a URL); " +
   "caption (Instagram caption: 1-2 sentences summarizing the fact plus 5-8 relevant hashtags); " +
-  "image_mood (10-20 words on emotional tone/atmosphere: mood, era, and energy only, with no artist, venue, festival, or song names and no other proper nouns).";
+  "image_mood (10-20 words on emotional tone/atmosphere: mood, era, and energy only, with no artist, venue, festival, or song names and no other proper nouns); " +
+  "cover_subject (5-15 words naming one specific, iconic, photographable close-up subject for the cover that represents this fact, described " +
+  "generically with NO proper nouns and NO recognizable real person's face: a concrete object/instrument/gear tied to the fact, e.g. 'a vintage " +
+  "silver bass synthesizer with chrome knobs' or 'a DJ's hand on a CDJ jog wheel'; anonymous crowds/hands/silhouettes are fine; no logos, no text).";
 
 const DEEPSEEK_KNOWLEDGE_RULES =
   "Write from your own well-established knowledge; do not claim to have searched the web. Base every claim on widely " +

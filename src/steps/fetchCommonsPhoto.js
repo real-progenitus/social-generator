@@ -43,7 +43,7 @@ function stripHtml(html) {
 
 // Lowercase, collapse punctuation to single spaces — so "Eiffel_65" and
 // "Eiffel 65" compare equal, and "panoramio_(65)" doesn't read as "... 65 ...".
-function normalize(s) {
+export function normalize(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
@@ -76,7 +76,7 @@ function primaryText(page, info) {
   return [page.title, info.extmetadata?.ObjectName?.value].filter(Boolean).join(" ");
 }
 
-function looksExcluded(text) {
+export function looksExcluded(text) {
   return EXCLUDE_PATTERN.test(text);
 }
 

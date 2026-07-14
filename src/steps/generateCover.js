@@ -4,6 +4,7 @@ import { config } from "../config.js";
 import { recordUsedCommonsPhoto, usedCommonsPhotoUrls } from "../db.js";
 import { generateGrokImage } from "../lib/grokImage.js";
 import { fetchCommonsPhotos } from "./fetchCommonsPhoto.js";
+import { fetchOpenversePhotos } from "./fetchOpenversePhoto.js";
 
 const MIME_BY_EXT = {
   ".jpg": "image/jpeg",
@@ -30,11 +31,11 @@ function localCover(imagePath, outDir) {
   return { path: file, mime };
 }
 
-async function downloadCommonsPhoto(photo, outDir, basename = "cover-raw") {
+async function downloadPhoto(photo, outDir, basename = "cover-raw", source = "Wikimedia Commons") {
   const res = await fetch(photo.url, {
     headers: { "User-Agent": `social-generator/1.0 (Instagram carousel bot; ${config.postHandle})` },
   });
-  if (!res.ok) throw new Error(`Failed to download Commons photo: ${res.status}`);
+  if (!res.ok) throw new Error(`Failed to download ${source} photo: ${res.status}`);
   const ext = photo.mime === "image/png" ? ".png" : ".jpg";
   const file = path.join(outDir, `${basename}${ext}`);
   fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
@@ -43,8 +44,33 @@ async function downloadCommonsPhoto(photo, outDir, basename = "cover-raw") {
     mime: photo.mime,
     credit: photo.credit,
     description: photo.description,
-    attribution: `Photo: ${photo.credit} / Wikimedia Commons (${photo.license})`,
+    attribution: `Photo: ${photo.credit} / ${source} (${photo.license})`,
   };
+}
+
+// Real-photo sources tried in order before AI generation. The shared
+// used_commons_photos table dedups picked URLs across both (it's really a
+// "used cover photo url" store, not Commons-specific).
+const PHOTO_SOURCES = [
+  [fetchCommonsPhotos, "Wikimedia Commons"],
+  [fetchOpenversePhotos, "Openverse"],
+];
+
+async function tryPhotoSource(fetchPhotos, source, photoSubject, outDir) {
+  // Up to two distinct photos: the first is the cover, the second (when the
+  // subject is well documented) becomes an extra full-bleed mid-carousel slide.
+  const photos = await fetchPhotos(photoSubject, usedCommonsPhotoUrls());
+  if (photos.length === 0) return null;
+  const [coverPhoto, extra] = photos;
+  console.log(`[generateCover] using ${source} photo of "${photoSubject}" (${coverPhoto.license})`);
+  recordUsedCommonsPhoto(coverPhoto.descriptionUrl, photoSubject);
+  const cover = await downloadPhoto(coverPhoto, outDir, "cover-raw", source);
+  if (extra) {
+    console.log(`[generateCover] second ${source} photo of "${photoSubject}" available — adding extra photo slide`);
+    recordUsedCommonsPhoto(extra.descriptionUrl, photoSubject);
+    cover.extraPhoto = await downloadPhoto(extra, outDir, "extra-raw", source);
+  }
+  return cover;
 }
 
 // Kept deliberately plain: no "neon," "abstract composition," "waveforms," or
@@ -59,45 +85,39 @@ async function downloadCommonsPhoto(photo, outDir, basename = "cover-raw") {
 // A tight close-up on one simple subject sidesteps that entirely.
 const NO_AI_LOOK =
   "Realistic photograph, not digital art or illustration. No text, no logos, no illustrated or " +
-  "cartoon elements, no overlaid graphics, waveforms, or sound-wave visuals. Portrait orientation, " +
-  "shot on a professional camera with intentional, artistic composition: dramatic natural light, " +
-  "meaningful framing, a genuine editorial/documentary-photography feel. Extreme close-up or macro " +
-  "shot filling the frame with ONE simple, generic subject, not a wide establishing shot of a whole " +
-  "stage, rig, or room: a single hand on a single fader, one spinning record, one set of glowing " +
-  "synth knobs, one turntable needle on vinyl, one microphone. Shallow depth of field, softly " +
-  "blurred background.";
+  "cartoon elements, no overlaid graphics, waveforms, or sound-wave visuals. No recognizable faces of real " +
+  "people. Portrait orientation, shot on a professional camera with intentional, artistic composition: " +
+  "dramatic natural light, meaningful framing, a genuine editorial/documentary-photography feel. Frame it " +
+  "tight as an extreme close-up or macro filling the frame with the single subject, not a wide establishing " +
+  "shot of a whole stage, rig, or room. Shallow depth of field, softly blurred background.";
 
-// fact.image_mood is generated name-free (see FACT_SCHEMA in generateFact.js)
-// specifically so it's safe to drop into the image prompt: including the
-// actual artist/venue/festival name here (beyond the one deliberate mention
-// below for artist_specific gear) tends to send Grok off toward a likeness or
-// a literal signage/logo read instead of the intended abstract mood shot.
+// fact.image_mood is generated name-free (see FACT_SCHEMA) so it's safe to drop
+// into the prompt: a real artist/venue/festival name here tends to send Grok
+// toward a likeness or a literal signage/logo read.
 function moodClause(fact) {
   return fact.image_mood ? ` Mood: ${fact.image_mood}.` : "";
 }
 
-function buildPrompt(fact) {
+// The fact carries a specific, face-free cover_subject (see FACT_SCHEMA), so the
+// Grok fallback shoots something tied to THIS fact instead of a stock gear shot.
+// Older facts (pre-cover_subject) or a rare empty value fall back to generic
+// gear phrasing keyed off the subject/topic.
+function grokSubject(fact) {
+  if (fact.cover_subject) return fact.cover_subject;
   if (fact.fact_type === "artist_specific" && fact.artist_name) {
-    if (config.artistImageMode === "photoreal") {
-      // Explicit opt-in only — see README §2.2 for the legal/platform risk.
-      return (
-        `Extreme close-up editorial photograph evoking the world of ${fact.artist_name}: one small, ` +
-        `generic detail of gear or hands-on equipment from their era of electronic music, not a wide ` +
-        `stage or rig shot.${moodClause(fact)} ${NO_AI_LOOK}`
-      );
-    }
     return (
-      `Extreme close-up photograph of one small, generic piece of gear associated with ${fact.artist_name}'s ` +
-      `era of electronic music: a hand on a mixer fader, a spinning vinyl record, a synthesizer's glowing ` +
-      `knobs, or a turntable needle on a record. No people, no faces, no human figures or silhouettes, no ` +
-      `wide stage or venue shot.${moodClause(fact)} ${NO_AI_LOOK}`
+      `one small, generic piece of gear from ${fact.artist_name}'s era of electronic music ` +
+      "(a hand on a mixer fader, a spinning vinyl record, a synthesizer's glowing knobs), no people or faces"
     );
   }
   return (
-    `Extreme close-up photograph of one small, generic detail representing: ${fact.topic}. A hand on a ` +
-    `mixer fader, a spinning record, glowing equipment knobs, or a close crop of club lighting, not a ` +
-    `wide club, festival, or studio establishing shot.${moodClause(fact)} ${NO_AI_LOOK}`
+    `one small, generic detail representing ${fact.topic}: a hand on a mixer fader, a spinning record, ` +
+    "glowing equipment knobs, or a close crop of club lighting"
   );
+}
+
+function buildPrompt(fact) {
+  return `Extreme close-up photograph of ${grokSubject(fact)}.${moodClause(fact)} ${NO_AI_LOOK}`;
 }
 
 function mockCover(outDir) {
@@ -143,27 +163,16 @@ export async function generateCover(fact, outDir) {
   const photoSubject =
     fact.image_subject || (fact.fact_type === "artist_specific" ? fact.artist_name : null);
   if (!config.mockMode && photoSubject) {
-    try {
-      // Pull up to two distinct photos: the first is the cover, the second (if
-      // the subject is well documented enough to have one) becomes an extra
-      // full-bleed slide in the middle of the carousel.
-      const photos = await fetchCommonsPhotos(photoSubject, usedCommonsPhotoUrls());
-      if (photos.length > 0) {
-        const [coverPhoto, extra] = photos;
-        console.log(`[generateCover] using Wikimedia Commons photo of "${photoSubject}" (${coverPhoto.license})`);
-        recordUsedCommonsPhoto(coverPhoto.descriptionUrl, photoSubject);
-        const cover = await downloadCommonsPhoto(coverPhoto, outDir);
-        if (extra) {
-          console.log(`[generateCover] second Commons photo of "${photoSubject}" available — adding extra photo slide`);
-          recordUsedCommonsPhoto(extra.descriptionUrl, photoSubject);
-          cover.extraPhoto = await downloadCommonsPhoto(extra, outDir, "extra-raw");
-        }
-        return cover;
+    for (const [fetchPhotos, source] of PHOTO_SOURCES) {
+      try {
+        const cover = await tryPhotoSource(fetchPhotos, source, photoSubject, outDir);
+        if (cover) return cover;
+        console.log(`[generateCover] no unused ${source} photo for "${photoSubject}"`);
+      } catch (err) {
+        console.warn(`[generateCover] ${source} lookup failed (${err.message})`);
       }
-      console.log(`[generateCover] no unused Commons photo for "${photoSubject}" — falling back to AI generation`);
-    } catch (err) {
-      console.warn(`[generateCover] Commons photo lookup failed (${err.message}) — falling back to AI generation`);
     }
+    console.log(`[generateCover] no real photo for "${photoSubject}" — falling back to AI generation`);
   }
 
   if (config.mockMode) {
