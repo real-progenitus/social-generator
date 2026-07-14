@@ -1,10 +1,40 @@
 import { config } from "../config.js";
 import { tg } from "../lib/telegram.js";
-import { getEvent, updateEvent } from "./db.js";
+import { getEvent, isPaused, pauseSender, resumeSender, updateEvent } from "./db.js";
 import { replyToComment, sendMessengerMessage } from "./graph.js";
 
 function label(eventType) {
   return eventType === "comment" ? "💬 Comment" : "✉️ Message";
+}
+
+// Same button in both states, toggled in place by editing the message's
+// reply_markup rather than needing a fresh message to show the opposite
+// action — see handleTakeoverCallback.
+function takeoverKeyboard(fromId, paused) {
+  return {
+    inline_keyboard: [
+      [
+        paused
+          ? { text: "▶️ Resume bot", callback_data: `resume:${fromId}` }
+          : { text: "⏸ Take over", callback_data: `pause:${fromId}` },
+      ],
+    ],
+  };
+}
+
+// Sent instead of the normal auto-reply notification when a sender is
+// already paused — no AI call happens for them (see webhook.js), so this is
+// just a passthrough of what they said, with the button to hand back to the
+// bot right there.
+export async function notifyPausedIncoming(event) {
+  if (!event.from_id) return; // no sender id to resume on later, nothing to attach the button to
+  await tg("sendMessage", {
+    chat_id: config.telegramChatId,
+    text:
+      `🙋 ${label(event.event_type)} from ${event.from_name || "someone"} (#${event.id}) — you're handling this one:\n\n` +
+      event.content,
+    reply_markup: takeoverKeyboard(event.from_id, true),
+  });
 }
 
 async function deliver(event) {
@@ -40,18 +70,46 @@ export async function sendForFbApproval(event) {
 
 // Only used when FB_AUTO_REPLY=true — posted after the fact for visibility,
 // not as a gate (the reply has already gone out by the time this sends).
+// Carries the "take over" button so a bad reply can be caught mid-conversation
+// and handed to a human for the rest of that thread.
 export async function notifyFbSent(event) {
   await tg("sendMessage", {
     chat_id: config.telegramChatId,
     text: `🚀 Auto-replied to ${label(event.event_type).toLowerCase()} from ${event.from_name || "someone"} (#${event.id}):\n${event.proposed_reply}`,
+    reply_markup: event.from_id ? takeoverKeyboard(event.from_id, false) : undefined,
+  });
+}
+
+// Toggles pause/resume for a sender and flips the button in place on the
+// same Telegram message, so there's no separate "list" to manage — whichever
+// notification you're looking at is always up to date.
+async function handleTakeoverCallback(action, fromId, cb) {
+  if (!fromId) return;
+  if (action === "pause") {
+    pauseSender(fromId);
+  } else {
+    resumeSender(fromId);
+  }
+  await tg("answerCallbackQuery", {
+    callback_query_id: cb.id,
+    text:
+      action === "pause"
+        ? "⏸ Paused — bot will stay quiet for this person until you resume."
+        : "▶️ Resumed — bot is back on for this person.",
+  });
+  await tg("editMessageReplyMarkup", {
+    chat_id: cb.message.chat.id,
+    message_id: cb.message.message_id,
+    reply_markup: takeoverKeyboard(fromId, action === "pause"),
   });
 }
 
 async function handleCallback(cb) {
-  const [action, idStr] = String(cb.data ?? "").split(":");
+  const [action, arg] = String(cb.data ?? "").split(":");
+  if (action === "pause" || action === "resume") return handleTakeoverCallback(action, arg, cb);
   if (action !== "fbapprove" && action !== "fbreject") return;
 
-  const eventId = Number(idStr);
+  const eventId = Number(arg);
   const event = getEvent(eventId);
 
   const reply = async (text) => {

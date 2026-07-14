@@ -7,12 +7,32 @@ import {
   findPendingNudge,
   FOLLOW_UP_TOPICS,
   getEvent,
+  isPaused,
   recentEventsFrom,
   updateEvent,
 } from "./db.js";
 import { generateReply } from "./generateReply.js";
 import { fetchPostContext, replyToComment, sendMessengerMessage, sendTypingOn } from "./graph.js";
-import { notifyFbSent, sendForFbApproval } from "./review.js";
+import { notifyFbSent, notifyPausedIncoming, sendForFbApproval } from "./review.js";
+
+// A sender currently under human takeover gets no AI call at all (that's the
+// whole point — stop paying for and sending bot replies to them) and no
+// follow-up-nudge tracking. The message is just logged and passed through to
+// Telegram so the "resume" button is right there when the human's done.
+async function recordPausedIncoming({ eventType, platformEventId, fromId, fromName, content, postContext }) {
+  const eventId = createEvent({
+    platform_event_id: platformEventId,
+    event_type: eventType,
+    from_id: fromId ?? null,
+    from_name: fromName ?? null,
+    content,
+    post_context: postContext ?? null,
+    proposed_reply: null,
+    topic: null,
+    status: "human_takeover",
+  });
+  await notifyPausedIncoming(getEvent(eventId));
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -97,6 +117,18 @@ async function handleComment(value, fromId) {
   if (!message) return;
 
   const postContext = value.post_id ? await fetchPostContext(value.post_id) : "";
+
+  if (isPaused(fromId)) {
+    return recordPausedIncoming({
+      eventType: "comment",
+      platformEventId: commentId,
+      fromId,
+      fromName: value.from?.name,
+      content: message,
+      postContext,
+    });
+  }
+
   const history = recentEventsFrom(fromId, "comment");
   const { reply: proposedReply, topic } = await generateReply({
     eventType: "comment",
@@ -127,6 +159,16 @@ async function handlePagePost(value, fromId) {
   const message = (value.message ?? "").trim();
   if (!message) return; // photo/video-only post with no caption, nothing to reply to
 
+  if (isPaused(fromId)) {
+    return recordPausedIncoming({
+      eventType: "comment",
+      platformEventId: postId,
+      fromId,
+      fromName: value.from?.name,
+      content: message,
+    });
+  }
+
   const history = recentEventsFrom(fromId, "comment");
   const { reply: proposedReply, topic } = await generateReply({
     eventType: "comment",
@@ -155,6 +197,10 @@ async function handleMessagingEvent(messaging) {
   const senderId = messaging.sender?.id;
   if (!text || !mid || messaging.message?.is_echo) return; // is_echo = our own sent message, re-delivered
   if (eventExists(mid)) return;
+
+  if (isPaused(senderId)) {
+    return recordPausedIncoming({ eventType: "message", platformEventId: mid, fromId: senderId, content: text });
+  }
 
   // If we're waiting on a reply to a check-in nudge from this sender, this
   // message closes that loop — the reply should react to whatever the nudge

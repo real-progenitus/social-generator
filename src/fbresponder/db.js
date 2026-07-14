@@ -47,10 +47,45 @@ for (const [column, type] of [
   if (!exists) db.exec(`ALTER TABLE fb_events ADD COLUMN ${column} ${type}`);
 }
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS paused_senders (
+    from_id TEXT PRIMARY KEY,
+    paused_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
 // Topics that get a proactive "did this work out?" nudge if the sender goes
 // quiet for an hour — shared between the scheduling check in webhook.js and
 // the due-nudge query below, so the two can't drift apart.
 export const FOLLOW_UP_TOPICS = ["photo_help", "post_redirect"];
+
+// If a Telegram "take over" is forgotten, the bot resumes itself after this
+// many hours rather than staying silent on that person indefinitely.
+const PAUSE_AUTO_EXPIRE_HOURS = 4;
+
+export function pauseSender(fromId) {
+  db.prepare(
+    `INSERT INTO paused_senders (from_id, paused_at) VALUES (?, datetime('now'))
+     ON CONFLICT(from_id) DO UPDATE SET paused_at = excluded.paused_at`,
+  ).run(fromId);
+}
+
+export function resumeSender(fromId) {
+  db.prepare("DELETE FROM paused_senders WHERE from_id = ?").run(fromId);
+}
+
+// True if a human is currently handling this sender manually. Expiry is
+// enforced directly in the query (no background sweep needed) — a stale row
+// just stops matching and is harmless to leave behind.
+export function isPaused(fromId) {
+  if (!fromId) return false;
+  return !!db
+    .prepare(
+      `SELECT 1 FROM paused_senders
+       WHERE from_id = ? AND paused_at > datetime('now', '-' || ? || ' hours')`,
+    )
+    .get(fromId, PAUSE_AUTO_EXPIRE_HOURS);
+}
 
 export function eventExists(platformEventId) {
   return !!db
