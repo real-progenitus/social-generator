@@ -67,6 +67,15 @@ const NO_AI_LOOK =
   "synth knobs, one turntable needle on vinyl, one microphone. Shallow depth of field, softly " +
   "blurred background.";
 
+// fact.image_mood is generated name-free (see FACT_SCHEMA in generateFact.js)
+// specifically so it's safe to drop into the image prompt: including the
+// actual artist/venue/festival name here (beyond the one deliberate mention
+// below for artist_specific gear) tends to send Grok off toward a likeness or
+// a literal signage/logo read instead of the intended abstract mood shot.
+function moodClause(fact) {
+  return fact.image_mood ? ` Mood: ${fact.image_mood}.` : "";
+}
+
 function buildPrompt(fact) {
   if (fact.fact_type === "artist_specific" && fact.artist_name) {
     if (config.artistImageMode === "photoreal") {
@@ -74,20 +83,20 @@ function buildPrompt(fact) {
       return (
         `Extreme close-up editorial photograph evoking the world of ${fact.artist_name}: one small, ` +
         `generic detail of gear or hands-on equipment from their era of electronic music, not a wide ` +
-        `stage or rig shot. Theme: ${fact.topic}. ${NO_AI_LOOK}`
+        `stage or rig shot.${moodClause(fact)} ${NO_AI_LOOK}`
       );
     }
     return (
       `Extreme close-up photograph of one small, generic piece of gear associated with ${fact.artist_name}'s ` +
       `era of electronic music: a hand on a mixer fader, a spinning vinyl record, a synthesizer's glowing ` +
       `knobs, or a turntable needle on a record. No people, no faces, no human figures or silhouettes, no ` +
-      `wide stage or venue shot. Theme: ${fact.topic}. ${NO_AI_LOOK}`
+      `wide stage or venue shot.${moodClause(fact)} ${NO_AI_LOOK}`
     );
   }
   return (
     `Extreme close-up photograph of one small, generic detail representing: ${fact.topic}. A hand on a ` +
     `mixer fader, a spinning record, glowing equipment knobs, or a close crop of club lighting, not a ` +
-    `wide club, festival, or studio establishing shot. ${NO_AI_LOOK}`
+    `wide club, festival, or studio establishing shot.${moodClause(fact)} ${NO_AI_LOOK}`
   );
 }
 

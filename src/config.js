@@ -12,6 +12,10 @@ export const config = {
 
   xaiApiKey: process.env.XAI_API_KEY ?? "",
   grokImageModel: process.env.GROK_IMAGE_MODEL ?? "grok-2-image",
+  // Second model the food account's cover generator alternates in against
+  // grokImageModel, to compare quality/cost side by side over time — see
+  // generateFoodCover.js. Unused by the music (bass_vault) pipeline.
+  grokImageModelAlt: process.env.GROK_IMAGE_MODEL_ALT ?? "grok-imagine-image",
 
   // Path to a local image file — when set, generateCover uses it verbatim
   // instead of calling the xAI Grok API. For testing the render/review/

@@ -61,6 +61,15 @@ function buildPrompt(fact) {
   );
 }
 
+// A/B test: [[food-grok-image-model-decision]] found the quality tier got
+// dish details right where the standard tier didn't, but that was only
+// verified on 2 dishes. Alternate models per-post (50/50) so apiMetrics
+// naturally accumulates a large, side-by-side sample of both cost and
+// output quality across the full range of dishes this account posts.
+function pickGrokImageModel() {
+  return Math.random() < 0.5 ? config.grokImageModel : config.grokImageModelAlt;
+}
+
 /**
  * Generate the cover artwork for a bitemeweekly post. Grok-only — no Commons
  * lookup: a stock-photo search doesn't need to match a real person's likeness
@@ -83,10 +92,12 @@ export async function generateFoodCover(fact, outDir) {
   }
 
   const prompt = buildPrompt(fact);
-  console.log(`[generateFoodCover] prompt: ${prompt.slice(0, 120)}...`);
+  const model = pickGrokImageModel();
+  console.log(`[generateFoodCover] model=${model} prompt: ${prompt.slice(0, 120)}...`);
 
   const b64 = await generateGrokImage({
     prompt,
+    model,
     account: config.accountLabel,
     operation: "foodCover",
   });

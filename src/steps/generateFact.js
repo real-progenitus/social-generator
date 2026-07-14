@@ -53,6 +53,7 @@ function sanitizeFact(fact) {
     slides: fact.slides.map(clean),
     source_note: clean(fact.source_note),
     caption: clean(fact.caption),
+    image_mood: clean(fact.image_mood),
   };
 }
 
@@ -95,6 +96,14 @@ const FACT_SCHEMA = {
       description:
         "Instagram caption: 1-2 sentences summarizing the fact plus 5-8 relevant hashtags",
     },
+    image_mood: {
+      type: "string",
+      description:
+        "10-20 words describing the emotional tone/atmosphere this specific fact evokes (e.g. rebellious and " +
+        "underground, euphoric and packed, tense and controversial, nostalgic and gritty), for briefing an AI photo " +
+        "generator when no real photo of the subject is available. Describe mood, era, and energy only: no artist, " +
+        "venue, festival, or song names, and no other proper nouns.",
+    },
   },
   required: [
     "fact_type",
@@ -105,6 +114,7 @@ const FACT_SCHEMA = {
     "slides",
     "source_note",
     "caption",
+    "image_mood",
   ],
   additionalProperties: false,
 };
@@ -153,6 +163,7 @@ const MOCK_FACT = {
     "Documented in interviews with DJ Pierre and Roland's own company history of the TB-303.",
   caption:
     "The bass synth nobody wanted became the sound of a genre. 🎛️ #acidhouse #tb303 #electronicmusic #housemusic #musichistory #synth #chicagohouse",
+  image_mood: "gritty, underground, DIY ingenuity, a cheap discarded machine turned cult weapon",
 };
 
 // Real web search grounds each fact in sources at generation time, which

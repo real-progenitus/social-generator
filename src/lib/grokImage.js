@@ -12,11 +12,13 @@ const XAI_IMAGES_URL = "https://api.x.ai/v1/images/generations";
  * @param {string} opts.prompt
  * @param {string} opts.account    Account label for the dashboard.
  * @param {string} opts.operation  Call-site label (e.g. "cover", "foodCover").
+ * @param {string} [opts.model]    Overrides config.grokImageModel — lets a
+ *                                 caller A/B test a second model per call.
  * @returns {Promise<string>} base64 image data (b64_json).
  */
-export async function generateGrokImage({ prompt, account, operation }) {
+export async function generateGrokImage({ prompt, account, operation, model }) {
   const start = Date.now();
-  const model = config.grokImageModel;
+  const resolvedModel = model ?? config.grokImageModel;
   try {
     const res = await fetch(XAI_IMAGES_URL, {
       method: "POST",
@@ -24,7 +26,7 @@ export async function generateGrokImage({ prompt, account, operation }) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.xaiApiKey}`,
       },
-      body: JSON.stringify({ model, prompt, n: 1, response_format: "b64_json" }),
+      body: JSON.stringify({ model: resolvedModel, prompt, n: 1, response_format: "b64_json" }),
     });
 
     if (!res.ok) {
@@ -38,7 +40,7 @@ export async function generateGrokImage({ prompt, account, operation }) {
 
     recordImageCall({
       account,
-      model,
+      model: resolvedModel,
       operation,
       durationMs: Date.now() - start,
       imageCount: 1,
@@ -48,7 +50,7 @@ export async function generateGrokImage({ prompt, account, operation }) {
   } catch (err) {
     recordImageCall({
       account,
-      model,
+      model: resolvedModel,
       operation,
       durationMs: Date.now() - start,
       status: "error",

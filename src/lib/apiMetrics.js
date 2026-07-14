@@ -84,10 +84,22 @@ const CLAUDE_PRICING = {
 // Anthropic web search: $10 per 1,000 requests.
 const WEB_SEARCH_PER_REQUEST = 10 / 1000;
 
-// xAI image price per generated image. Set per deployed model; override with
-// XAI_IMAGE_PRICE_USD if a model's price differs. Verify against xAI's current
-// pricing when changing the deployed GROK_IMAGE_MODEL.
-const XAI_IMAGE_PRICE_USD = Number(process.env.XAI_IMAGE_PRICE_USD ?? 0.07);
+// xAI image price per generated image, keyed by model (docs.x.ai, 1024x1024
+// output — close enough to these carousels' portrait dimensions). Needed
+// per-model rather than one flat rate now that generateFoodCover.js
+// alternates grokImageModel/grokImageModelAlt in the same account: a single
+// price would misprice whichever model doesn't match it. Verify against
+// xAI's current pricing whenever a deployed GROK_IMAGE_MODEL(_ALT) changes.
+// XAI_IMAGE_PRICE_USD is the fallback for any model not listed here
+// (in practice, the legacy default grok-2-image).
+const XAI_IMAGE_PRICING = {
+  "grok-imagine-image-quality": 0.05,
+  "grok-imagine-image": 0.02,
+};
+
+function xaiImagePrice(model) {
+  return XAI_IMAGE_PRICING[model] ?? Number(process.env.XAI_IMAGE_PRICE_USD ?? 0.07);
+}
 
 function claudeRates(model) {
   const entry = CLAUDE_PRICING[model];
@@ -215,7 +227,7 @@ export function recordImageCall({ account, model, operation, durationMs, imageCo
     cache_creation_tokens: 0,
     web_search_count: 0,
     image_count: count,
-    cost_usd: count * XAI_IMAGE_PRICE_USD,
+    cost_usd: count * xaiImagePrice(model),
     status,
     error_msg: error ? String(error.message ?? error).slice(0, 500) : null,
   });
