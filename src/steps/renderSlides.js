@@ -111,6 +111,25 @@ function bodyHtml(text, variant, isLast, sourceNote) {
   </div>`;
 }
 
+// Body slides render at a fixed 52px, but a longer-than-usual slide would clip
+// against the card's `overflow: hidden`. Step the font down (to a 30px floor)
+// until the card content fits, so no slide is ever cut off. Cover/photo slides
+// have no `.body-text` and are left untouched.
+async function fitBodyText(page) {
+  await page.evaluate(() => {
+    const card = document.querySelector(".body-slide .card");
+    const text = document.querySelector(".body-slide .body-text");
+    if (!card || !text) return;
+    const FLOOR = 30;
+    let size = 52;
+    text.style.fontSize = `${size}px`;
+    while (size > FLOOR && card.scrollHeight > card.clientHeight) {
+      size -= 2;
+      text.style.fontSize = `${size}px`;
+    }
+  });
+}
+
 const IG_CAROUSEL_MAX = 10;
 
 /**
@@ -149,6 +168,7 @@ export async function renderSlides(fact, coverImage, outDir) {
     for (let i = 0; i < slides.length; i++) {
       const html = template.replace("<!--SLIDE_CONTENT-->", slides[i]);
       await page.setContent(html, { waitUntil: "load" });
+      await fitBodyText(page);
       const file = path.join(outDir, `slide-${String(i).padStart(2, "0")}.png`);
       await page.screenshot({ path: file, type: "png" });
       paths.push(file);

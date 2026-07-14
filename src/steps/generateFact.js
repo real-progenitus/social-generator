@@ -86,7 +86,9 @@ const FACT_SCHEMA = {
       type: "array",
       items: { type: "string" },
       description:
-        "4 to 6 short text blocks for the carousel body: the fact in detail, context, why it matters. Each 1-3 sentences, standalone.",
+        "4 to 6 short text blocks for the carousel body: the fact in detail, context, why it matters. " +
+        "Each block is 1-2 short sentences and MUST be at most ~200 characters — they render on a fixed " +
+        "card and longer text gets cut off. Standalone, no filler.",
     },
     source_note: {
       type: "string",
@@ -295,7 +297,8 @@ const JSON_SHAPE_INSTRUCTION =
   "like 'Berghain', or a festival like 'Tomorrowland'; null if the fact has no single real-world subject to photograph); " +
   "topic (the topic seed this fact expands); " +
   "headline (cover hook, max ~90 characters, punchy and factual, no clickbait); " +
-  "slides (an array of 4 to 6 short strings, each 1-3 sentences and standalone: the fact in detail, context, why it matters); " +
+  "slides (an array of 4 to 6 short strings; each 1-2 short sentences, standalone, and AT MOST ~200 characters " +
+  "because they render on a fixed card and longer text is cut off: the fact in detail, context, why it matters); " +
   "source_note (brief factual grounding, the kind of documentation this is known from, not a URL); " +
   "caption (Instagram caption: 1-2 sentences summarizing the fact plus 5-8 relevant hashtags); " +
   "image_mood (10-20 words on emotional tone/atmosphere: mood, era, and energy only, with no artist, venue, festival, or song names and no other proper nouns).";
@@ -311,7 +314,7 @@ const DEEPSEEK_KNOWLEDGE_RULES =
  * DeepSeek knowledge-only fact generation for a historical pillar. Cheap, no
  * live search. Returns the validated, method-tagged fact.
  */
-async function generateFactViaDeepSeek(topic, usedList) {
+async function generateFactViaDeepSeek(topic, usedList, note) {
   const text = await callDeepSeek({
     account: config.accountLabel,
     operation: "generateFact",
@@ -329,14 +332,20 @@ async function generateFactViaDeepSeek(topic, usedList) {
 
   const fact = parseFactJson(text);
   validateFact(fact);
-  return tagFact(sanitizeFact(fact), "deepseek_knowledge");
+  return tagFact(sanitizeFact(fact), "deepseek_knowledge", note);
 }
 
 const DEEPSEEK_NEWS_RULES =
   "You are given the results of a live web search for what is happening in electronic music right now. Base every claim " +
   "strictly on what these search results actually say; do not use your own memory for what is current, and do not add " +
-  "specifics the results do not support. Pick the single most compelling, clearly-supported current story. In source_note, " +
-  "name the kind of outlets reporting it (e.g. 'as reported by DJ Mag and Resident Advisor'), not a URL. ";
+  "specifics the results do not support. Choose the single most compelling, clearly-supported CURRENT story that is " +
+  "genuinely about electronic music (house, techno, EDM, drum & bass, trance, electronic artists/festivals/labels) and " +
+  "whose main subject or artist does NOT appear in the already-posted list below. A story counts as already-covered if " +
+  "its main subject or artist matches one already posted, EVEN IF the wording, headline, or angle differs, so never " +
+  "re-post or re-angle an already-covered story. Ignore results about pop, rock, hip-hop, or non-music topics. If every " +
+  'fresh, on-genre result is already covered (or there are none), respond with EXACTLY {"no_fresh_story": true} and ' +
+  "nothing else. Otherwise, in source_note, name the kind of outlets reporting it (e.g. 'as reported by DJ Mag and " +
+  "Resident Advisor'), not a URL. ";
 
 // Default outlet whitelist for the recent_news search — keeps results on
 // electronic-music press so off-topic hits (local news, food festivals) don't
@@ -357,21 +366,82 @@ const RECENT_NEWS_DOMAINS = [
   "billboard.com",
 ];
 
+// Rotated per run so back-to-back recent_news posts don't keep surfacing the
+// same dominant story — EDM breaking-news supply is thin, so varying the angle
+// widens the candidate pool.
+const RECENT_NEWS_QUERIES = [
+  "latest electronic music news: festival lineups and set announcements",
+  "new electronic music releases, singles, albums and collaborations this week",
+  "techno and house scene news: DJs, clubs, labels, controversy",
+  "electronic dance music (EDM) artist news and interviews",
+  "drum and bass, trance, and underground electronic music news",
+  "electronic music breaking news and viral moments right now",
+];
+
+// Thrown when Tavily returns nothing usable or DeepSeek reports no fresh,
+// not-already-covered electronic-music story — the dispatcher then falls back
+// to an evergreen fact rather than repeating a stale one.
+class NoFreshNews extends Error {
+  constructor() {
+    super("no fresh electronic-music news found");
+    this.name = "NoFreshNews";
+  }
+}
+
+// Deterministic backstop for the soft dedup instruction: treat a news fact as a
+// repeat if its artist/subject matches an already-posted one, or its headline
+// strongly overlaps — so a reworded version of the same story falls through to
+// the evergreen fallback instead of being posted again.
+const normText = (s) =>
+  String(s ?? "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+
+function headlineOverlap(a, b) {
+  const wa = new Set(normText(a).split(" ").filter((w) => w.length > 3));
+  const wb = new Set(normText(b).split(" ").filter((w) => w.length > 3));
+  if (wa.size === 0 || wb.size === 0) return 0;
+  let inter = 0;
+  for (const w of wa) if (wb.has(w)) inter++;
+  return inter / (wa.size + wb.size - inter);
+}
+
+function isDuplicateOfUsed(fact, usedFacts) {
+  const artist = normText(fact.artist_name);
+  return usedFacts.some(
+    (u) => (artist && artist === normText(u.artist_name)) || headlineOverlap(fact.headline, u.headline) >= 0.5,
+  );
+}
+
+// DeepSeek sometimes phrases "there's no news" as a normal fact object instead
+// of the {"no_fresh_story": true} sentinel, producing a degenerate post. Catch
+// those in code so they route to the evergreen fallback, not the carousel.
+const NO_NEWS_PATTERNS = [
+  /\bno (fresh|recent|relevant|new|current|electronic|edm)\b[^.]*\b(news|stor(?:y|ies)|results|found|available)\b/i,
+  /\b(couldn'?t|could not|unable to|failed to)\s+(find|identify|locate)\b/i,
+  /\bsearch results?\b[^.]*\b(no|not|didn'?t|did not|empty)\b/i,
+];
+function looksLikeNoNews(fact) {
+  const blob = `${fact.headline ?? ""} ${(fact.slides ?? []).join(" ")}`;
+  return NO_NEWS_PATTERNS.some((re) => re.test(blob));
+}
+
 /**
  * recent_news fact generation, grounded in a live Tavily news search and
- * written by DeepSeek. Replaces Claude's web_search for this pillar.
+ * written by DeepSeek. Replaces Claude's web_search for this pillar. Throws
+ * NoFreshNews when there's no new, on-genre story to post.
  */
-async function generateRecentNewsViaTavily(usedList) {
+async function generateRecentNewsViaTavily(usedList, usedFacts = []) {
+  const query = RECENT_NEWS_QUERIES[Math.floor(Math.random() * RECENT_NEWS_QUERIES.length)];
+  console.log(`[generateFact] recent_news query: "${query}"`);
   const { answer, results } = await tavilySearch({
     account: config.accountLabel,
     operation: "recentNewsSearch",
-    query: "latest electronic music news: festivals, DJ sets, new releases, house, techno",
+    query,
     topic: "news",
     days: 14,
-    maxResults: 6,
+    maxResults: 10,
     includeDomains: config.tavilyIncludeDomains.length ? config.tavilyIncludeDomains : RECENT_NEWS_DOMAINS,
   });
-  if (results.length === 0) throw new Error("Tavily returned no recent-news results");
+  if (results.length === 0) throw new NoFreshNews();
 
   const sources =
     (answer ? `Search summary: ${answer}\n\n` : "") +
@@ -387,15 +457,21 @@ async function generateRecentNewsViaTavily(usedList) {
     user:
       `Content pillar: recent_news — ${CONTENT_PILLARS.recent_news}\n\n` +
       `Live search results (most recent electronic music news):\n${sources}\n\n` +
-      "Write one post about the single most compelling, clearly-supported current story from these results, with carousel copy.\n" +
+      "Write one post about the single most compelling, clearly-supported current ELECTRONIC-MUSIC story from these results, with carousel copy.\n" +
       'Set fact_type to "artist_specific" with artist_name if the story centers on one act, otherwise "generic" with artist_name null.\n\n' +
-      `Already-posted facts, do NOT repeat or closely paraphrase any of these:\n${usedList}`,
+      "Already-posted facts (main subject in parentheses). Pick a story whose main subject is NOT among these; if every " +
+      'fresh result is already here, output {"no_fresh_story": true}:\n' +
+      usedList,
   });
 
-  const fact = parseFactJson(text);
-  fact.topic = "recent_news"; // stable pillar key for analytics, as in the Claude path
-  validateFact(fact);
-  return tagFact(sanitizeFact(fact), "tavily_news_deepseek");
+  const parsed = parseFactJson(text);
+  if (parsed.no_fresh_story || looksLikeNoNews(parsed)) throw new NoFreshNews();
+  parsed.topic = "recent_news"; // stable pillar key for analytics, as in the Claude path
+  validateFact(parsed);
+  // Deterministic backstop: if DeepSeek re-picked an already-covered subject
+  // despite the instruction, treat it as no-fresh-news.
+  if (isDuplicateOfUsed(parsed, usedFacts)) throw new NoFreshNews();
+  return tagFact(sanitizeFact(parsed), "tavily_news_deepseek");
 }
 
 // JSON mode should return bare JSON, but strip stray code fences defensively.
@@ -416,8 +492,8 @@ function validateFact(fact) {
 // Tag the generation method so pipeline.js persists it to fact_check_json and
 // the dashboard/analytics can tell the A/B arms apart. The extra key rides
 // harmlessly in fact_json; renderers read only the known fields.
-function tagFact(fact, method) {
-  return { ...fact, fact_check: { method } };
+function tagFact(fact, method, note) {
+  return { ...fact, fact_check: note ? { method, note } : { method } };
 }
 
 /**
@@ -437,7 +513,10 @@ export async function generateFact({ flow } = {}) {
   }
 
   const used = recentUsedFacts(60);
-  const usedList = used.length > 0 ? used.map((f) => `- ${f.headline}`).join("\n") : "(none yet)";
+  const usedList =
+    used.length > 0
+      ? used.map((f) => `- ${f.headline}${f.artist_name ? ` (${f.artist_name})` : ""}`).join("\n")
+      : "(none yet)";
 
   // Fall back to the (always-available) Claude web_search path if a cheaper
   // path throws; `topic` is what that fallback should research.
@@ -450,9 +529,28 @@ export async function generateFact({ flow } = {}) {
     }
   };
 
+  // recent_news, with a graceful fallback: no fresh on-genre story => an
+  // evergreen DeepSeek fact (tagged so the approval message says so); a hard
+  // Tavily/DeepSeek failure => the always-available Claude web_search path.
+  const recentNews = async () => {
+    try {
+      return await generateRecentNewsViaTavily(usedList, used);
+    } catch (err) {
+      const note =
+        err.name === "NoFreshNews"
+          ? "no fresh news today — evergreen fact"
+          : "recent-news generation failed — evergreen fact";
+      console.warn(`[generateFact] recent_news (${err.message}); evergreen DeepSeek fallback`);
+      const t = pickTopic({ excludeRecentNews: true });
+      return withClaudeFallback(t, "evergreen DeepSeek (news fallback)", () =>
+        generateFactViaDeepSeek(t, usedList, note),
+      );
+    }
+  };
+
   // Explicit flow from the Telegram picker overrides the A/B split.
   if (flow === "recent_news") {
-    return withClaudeFallback(RECENT_NEWS_TOPIC, "recent_news via Tavily+DeepSeek", () => generateRecentNewsViaTavily(usedList));
+    return recentNews();
   }
   if (flow === "deepseek") {
     const topic = pickTopic({ excludeRecentNews: true });
@@ -468,7 +566,7 @@ export async function generateFact({ flow } = {}) {
   // Default: auto A/B dispatch.
   const topic = pickTopic();
   if (topic.kind === "recent_news") {
-    return withClaudeFallback(topic, "recent_news via Tavily+DeepSeek", () => generateRecentNewsViaTavily(usedList));
+    return recentNews();
   }
   if (Math.random() < config.deepseekShare) {
     console.log(`[generateFact] routing "${topic.topic}" to DeepSeek (${config.deepseekModel})`);

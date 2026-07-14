@@ -7,20 +7,20 @@ import { runPipeline } from "../pipeline.js";
 import { publishPost } from "./publish.js";
 
 // Generation flows offered by the /generate picker (callback_data `gen:<key>`).
-// "auto" = the default A/B dispatch; the others force a single path.
+// The daily cron runs the default A/B dispatch itself, so there's no Auto
+// button — you only pick manually when you want a specific source.
 const FLOWS = {
-  auto: "🎲 Auto (50/50 split)",
-  claude: "🔍 Claude + web search",
-  deepseek: "🧠 DeepSeek (knowledge)",
-  recent_news: "📰 Recent news (Tavily)",
+  recent_news: "📰 Recent news",
+  deepseek: "💸 Evergreen · DeepSeek",
+  claude: "🔍 Evergreen · Claude",
 };
 
 // Human labels for the method tagged onto each fact (fact.fact_check.method),
 // shown in the approval message so you can see which source produced the post.
 const METHOD_LABELS = {
-  web_search_grounded: "🔍 Claude + web search",
-  deepseek_knowledge: "🧠 DeepSeek (knowledge)",
-  tavily_news_deepseek: "📰 Tavily news + DeepSeek",
+  web_search_grounded: "🔍 Evergreen · Claude (web search)",
+  deepseek_knowledge: "💸 Evergreen · DeepSeek",
+  tavily_news_deepseek: "📰 Recent news (Tavily + DeepSeek)",
   mock: "🧪 mock",
 };
 const methodLabel = (m) => METHOD_LABELS[m] ?? m ?? "unknown";
@@ -48,7 +48,7 @@ export async function sendForReview(postId, fact, slidePaths) {
       `📋 Post #${postId} awaiting review\n\n` +
       `${fact.headline}\n\n` +
       `Type: ${fact.fact_type}${fact.artist_name ? ` (${fact.artist_name})` : ""}\n` +
-      `Generated via: ${methodLabel(fact.fact_check?.method)}\n` +
+      `Generated via: ${methodLabel(fact.fact_check?.method)}${fact.fact_check?.note ? ` — ${fact.fact_check.note}` : ""}\n` +
       `Source: ${fact.source_note}\n\n` +
       `Caption:\n${fact.caption}`,
     reply_markup: {
@@ -167,10 +167,9 @@ async function handleMessage(msg) {
     text: "🎛️ Which generation flow?",
     reply_markup: {
       inline_keyboard: [
-        [{ text: FLOWS.auto, callback_data: "gen:auto" }],
-        [{ text: FLOWS.claude, callback_data: "gen:claude" }],
-        [{ text: FLOWS.deepseek, callback_data: "gen:deepseek" }],
         [{ text: FLOWS.recent_news, callback_data: "gen:recent_news" }],
+        [{ text: FLOWS.deepseek, callback_data: "gen:deepseek" }],
+        [{ text: FLOWS.claude, callback_data: "gen:claude" }],
       ],
     },
   });
@@ -192,7 +191,7 @@ async function runGenerate(flow) {
     text: `⏳ Generating via ${FLOWS[flow]}…`,
   });
   try {
-    const postId = await runPipeline({ flow: flow === "auto" ? undefined : flow });
+    const postId = await runPipeline({ flow });
     // When REVIEW_REQUIRED=false, runPipeline publishes directly with no
     // Telegram message of its own, so confirm here. Otherwise sendForReview
     // already posted the carousel + approve/reject buttons.
