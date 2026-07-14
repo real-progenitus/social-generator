@@ -5,6 +5,7 @@ import {
   createEvent,
   eventExists,
   findPendingNudge,
+  FOLLOW_UP_TOPICS,
   getEvent,
   recentEventsFrom,
   updateEvent,
@@ -137,10 +138,11 @@ async function handleMessagingEvent(messaging) {
   if (!text || !mid || messaging.message?.is_echo) return; // is_echo = our own sent message, re-delivered
   if (eventExists(mid)) return;
 
-  // If we're waiting on a reply to a "did everything go ok?" nudge from this
-  // sender, this message closes that loop — the reply should suggest post
-  // promotion, and the nudge stops being "pending" either way (whether or
-  // not the topic is still photo_help, we don't want to re-nudge on it).
+  // If we're waiting on a reply to a check-in nudge from this sender, this
+  // message closes that loop — the reply should react to whatever the nudge
+  // was about (see FOLLOW_UP_NOTES in generateReply.js), and the nudge stops
+  // being "pending" either way (whether or not the topic repeats, we don't
+  // want to re-nudge on it).
   const pendingNudge = findPendingNudge(senderId);
 
   const history = recentEventsFrom(senderId, "message");
@@ -148,7 +150,7 @@ async function handleMessagingEvent(messaging) {
     eventType: "message",
     content: text,
     history,
-    suggestPromotion: !!pendingNudge,
+    followUpTopic: pendingNudge?.topic ?? null,
   });
 
   const eventId = createEvent({
@@ -169,7 +171,7 @@ async function handleMessagingEvent(messaging) {
   // Only schedule a follow-up once the answer has actually reached them —
   // not while it's stuck pending Telegram review or if the send failed.
   const finalEvent = getEvent(eventId);
-  if (!pendingNudge && topic === "photo_help" && finalEvent.status === "sent") {
+  if (!pendingNudge && FOLLOW_UP_TOPICS.includes(topic) && finalEvent.status === "sent") {
     updateEvent(eventId, { followup_status: "awaiting" });
   }
 }

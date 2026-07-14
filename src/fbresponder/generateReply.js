@@ -89,8 +89,10 @@ const SYSTEM_PROMPT =
   "- Keep replies SHORT - this is a chat DM, not an email. One sentence for a simple answer, two at most " +
   "for anything more complex (like the multi-step lost/found walkthrough). Plain language, at most one emoji. " +
   "Never write a paragraph.\n\n" +
-  "You must also classify the reply's topic as \"photo_help\" if it answers a question about adding/uploading " +
-  "a photo to a report, or a complaint that they can't add one - otherwise \"other\".";
+  "You must also classify the reply's topic: \"photo_help\" if it answers a question about adding/uploading " +
+  "a photo to a report, or a complaint that they can't add one; \"post_redirect\" if this reply includes the " +
+  "ifound download link (https://ifound.tech or the /pt variant) because the sender is reporting, or trying " +
+  "to report, a lost/found item; otherwise \"other\".";
 
 const REPLY_SCHEMA = {
   type: "object",
@@ -98,10 +100,11 @@ const REPLY_SCHEMA = {
     reply: { type: "string", description: "The reply text to send to the user, following all rules above." },
     topic: {
       type: "string",
-      enum: ["photo_help", "other"],
+      enum: ["photo_help", "post_redirect", "other"],
       description:
         "'photo_help' if this reply answers a question about adding/uploading a photo, or a complaint " +
-        "that they can't add one. 'other' for everything else.",
+        "that they can't add one. 'post_redirect' if this reply includes the ifound download link because " +
+        "the sender is reporting, or trying to report, a lost/found item. 'other' for everything else.",
     },
   },
   required: ["reply", "topic"],
@@ -115,10 +118,22 @@ const MOCK_REPLY = {
   topic: "other",
 };
 
-const PROMOTION_NOTE =
-  "\n\nNOTE: this message is their reply to your own earlier check-in asking whether their photo issue got " +
-  "resolved. Answer what they say normally, then close your reply with one brief, friendly line suggesting " +
-  "they can promote their post through the app to help more people see it.";
+// Notes appended when this message is closing the loop on a proactive
+// follow-up nudge (see followup.js) - keyed by the topic of the nudge that
+// was sent, since "did the photo work?" and "did you manage to post?" need
+// different framing for how to react to their answer.
+const FOLLOW_UP_NOTES = {
+  photo_help:
+    "\n\nNOTE: this message is their reply to your own earlier check-in asking whether their photo issue got " +
+    "resolved. Answer what they say normally, then close your reply with one brief, friendly line suggesting " +
+    "they can promote their post through the app to help more people see it.",
+  post_redirect:
+    "\n\nNOTE: this message is their reply to your own earlier check-in asking whether they managed to post " +
+    "their lost/found item on ifound. If they say they posted successfully, reply briefly and warmly, and you " +
+    "may mention they can promote the post through the app to help more people see it. If they say they " +
+    "haven't posted yet or ran into trouble, help them along using the posting flow steps above - don't just " +
+    "repeat the download link if it sounds like they already have the app.",
+};
 
 function renderHistory(history) {
   if (!history || history.length === 0) return "";
@@ -136,7 +151,7 @@ export async function generateReply({
   postContext,
   fromName,
   history,
-  suggestPromotion = false,
+  followUpTopic = null,
 }) {
   if (config.mockMode) {
     console.log("[fbresponder/generateReply] MOCK_MODE — returning canned reply");
@@ -155,7 +170,7 @@ export async function generateReply({
     ]
       .filter(Boolean)
       .join("\n") +
-    (suggestPromotion ? PROMOTION_NOTE : "");
+    (followUpTopic ? (FOLLOW_UP_NOTES[followUpTopic] ?? "") : "");
 
   const response = await client.messages.create({
     model: config.claudeModel,

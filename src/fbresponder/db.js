@@ -21,12 +21,13 @@ db.exec(`
     content TEXT,
     post_context TEXT,
     proposed_reply TEXT,
-    -- 'photo_help' | 'other' — classified by generateReply(), used to decide
-    -- whether this exchange gets a proactive follow-up nudge.
+    -- 'photo_help' | 'post_redirect' | 'other' — classified by generateReply(),
+    -- used to decide whether this exchange gets a proactive follow-up nudge.
     topic TEXT,
     -- null -> 'awaiting' (nudge due in an hour) -> 'nudge_sent' (waiting on
     -- their reply) -> 'replied' (they answered; loop closed). Only ever set
-    -- on 'photo_help' DM rows — see followup.js.
+    -- on 'photo_help' or 'post_redirect' DM rows — see followup.js and
+    -- FOLLOW_UP_TOPICS below.
     followup_status TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -45,6 +46,11 @@ for (const [column, type] of [
     .get(column);
   if (!exists) db.exec(`ALTER TABLE fb_events ADD COLUMN ${column} ${type}`);
 }
+
+// Topics that get a proactive "did this work out?" nudge if the sender goes
+// quiet for an hour — shared between the scheduling check in webhook.js and
+// the due-nudge query below, so the two can't drift apart.
+export const FOLLOW_UP_TOPICS = ["photo_help", "post_redirect"];
 
 export function eventExists(platformEventId) {
   return !!db
@@ -95,9 +101,10 @@ export function recentEventsFrom(fromId, eventType, limit = 6) {
   }));
 }
 
-// A prior 'photo_help' DM we sent a "did everything go ok?" nudge for, and
+// A prior 'photo_help'/'post_redirect' DM we sent a check-in nudge for, and
 // are still waiting to hear back from — used to detect that a fresh inbound
-// message is the reply closing that loop (triggers the promotion suggestion).
+// message is the reply closing that loop (triggers the topic-specific note
+// in generateReply.js).
 export function findPendingNudge(fromId) {
   if (!fromId) return null;
   return db
@@ -109,19 +116,21 @@ export function findPendingNudge(fromId) {
     .get(fromId);
 }
 
-// 'photo_help' DMs we answered over an hour ago that are still awaiting a
-// nudge, where the sender hasn't sent anything else since (any newer row
-// from the same from_id means they already replied — skip those).
+// DMs on a FOLLOW_UP_TOPICS topic we answered over an hour ago that are
+// still awaiting a nudge, where the sender hasn't sent anything else since
+// (any newer row from the same from_id means they already replied — skip
+// those).
 export function findDueFollowUps(delayMinutes) {
+  const placeholders = FOLLOW_UP_TOPICS.map(() => "?").join(", ");
   return db
     .prepare(
       `SELECT * FROM fb_events e
-       WHERE e.event_type = 'message' AND e.topic = 'photo_help' AND e.status = 'sent'
+       WHERE e.event_type = 'message' AND e.topic IN (${placeholders}) AND e.status = 'sent'
          AND e.followup_status = 'awaiting'
          AND e.updated_at <= datetime('now', '-' || ? || ' minutes')
          AND NOT EXISTS (
            SELECT 1 FROM fb_events e2 WHERE e2.from_id = e.from_id AND e2.id > e.id
          )`,
     )
-    .all(delayMinutes);
+    .all(...FOLLOW_UP_TOPICS, delayMinutes);
 }
