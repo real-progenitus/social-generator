@@ -11,8 +11,23 @@ import {
   updateEvent,
 } from "./db.js";
 import { generateReply } from "./generateReply.js";
-import { fetchPostContext, replyToComment, sendMessengerMessage } from "./graph.js";
+import { fetchPostContext, replyToComment, sendMessengerMessage, sendTypingOn } from "./graph.js";
 import { notifyFbSent, sendForFbApproval } from "./review.js";
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// The AI call itself only takes ~3s, and replies are often 100+ characters -
+// sent that fast, back to back, it reads as obviously automated rather than
+// a person typing. Hold the send back a bit longer, scaled to roughly how
+// long a person would take to type the reply, with jitter so the pacing
+// isn't suspiciously uniform.
+function typingDelayMs(text) {
+  const base = 1500 + text.length * 60; // ~1.5s "read + think" + ~60ms/char
+  const jitter = 0.85 + Math.random() * 0.3; // +/-15%
+  return Math.min(Math.max(base * jitter, 2000), 9000);
+}
 
 function verifySignature(rawBody, signatureHeader) {
   if (!signatureHeader || !signatureHeader.startsWith("sha256=")) return false;
@@ -31,8 +46,11 @@ async function routeGeneratedReply(event) {
   if (autoReply) {
     try {
       if (event.event_type === "comment") {
+        await wait(typingDelayMs(event.proposed_reply));
         await replyToComment(event.platform_event_id, event.proposed_reply);
       } else {
+        await sendTypingOn(event.from_id);
+        await wait(typingDelayMs(event.proposed_reply));
         await sendMessengerMessage(event.from_id, event.proposed_reply);
       }
       updateEvent(event.id, { status: "sent" });

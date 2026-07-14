@@ -36,6 +36,16 @@ export async function sendMessengerMessage(recipientId, text) {
   });
 }
 
+// Messenger's own "is typing…" indicator - shows for a few seconds (or
+// until a message is sent). Used to make auto-sent replies read as a person
+// typing rather than a reply appearing out of nowhere.
+export async function sendTypingOn(recipientId) {
+  return graph("POST", "me/messages", {
+    recipient: JSON.stringify({ id: recipientId }),
+    sender_action: "typing_on",
+  });
+}
+
 // Grounds a comment reply in what the parent post actually said, rather than
 // generating from the bare comment text alone.
 export async function fetchPostContext(postId) {
