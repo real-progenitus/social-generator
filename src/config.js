@@ -37,6 +37,15 @@ export const config = {
   outputDir: path.resolve(process.env.OUTPUT_DIR ?? "./output"),
   postHandle: process.env.POST_HANDLE ?? "@electronic.music.facts",
 
+  // Shared AI-usage metrics store — deliberately NOT the per-account DB_PATH, so
+  // every account process (pipeline crons, poll, fb-bot) records into one file
+  // the dashboard reads. All services run with cwd /opt/social-generator, so the
+  // repo-relative default resolves to the same file for every account.
+  metricsDbPath: path.resolve(process.env.METRICS_DB_PATH ?? "./data/metrics.db"),
+  // Cost/latency dashboard HTTP server (raw node:http, bound to 127.0.0.1 and
+  // fronted by Caddy). 8787 = media server, 8791 = fb webhook, so default 8788.
+  metricsServerPort: Number(process.env.METRICS_SERVER_PORT ?? 8788),
+
   mockMode: bool(process.env.MOCK_MODE, false),
 
   // "music" (default, Bass Vault) or "food" (bitemeweekly) — selects which

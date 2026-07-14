@@ -1,5 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
+import { callClaude } from "../lib/claudeClient.js";
 import { tg } from "../lib/telegram.js";
 import { findDueFollowUps, updateEvent } from "./db.js";
 import { sendMessengerMessage } from "./graph.js";
@@ -39,8 +39,9 @@ const NUDGE_LABELS = {
 async function craftNudgeText(originalContent, topic) {
   if (config.mockMode) return MOCK_NUDGES[topic] ?? MOCK_NUDGES.photo_help;
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
-  const response = await client.messages.create({
+  const response = await callClaude({
+    account: "ifound",
+    operation: "fbNudge",
     model: config.claudeModel,
     max_tokens: 100,
     thinking: { type: "disabled" },

@@ -1,10 +1,9 @@
-import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { getTopicWeights, recentUsedFacts } from "../db.js";
-import { createWithSearch } from "../lib/anthropicSearch.js";
+import { callClaude } from "../lib/claudeClient.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const topicsFile = path.join(here, "..", "..", "data", "topics.json");
@@ -181,9 +180,10 @@ export async function generateFact() {
       ? used.map((f) => `- ${f.headline}`).join("\n")
       : "(none yet)";
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
-
-  const response = await createWithSearch(client, {
+  const response = await callClaude({
+    account: config.account,
+    operation: "generateFact",
+    search: true,
     model: config.claudeModel,
     max_tokens: 16000,
     tools: [WEB_SEARCH_TOOL],

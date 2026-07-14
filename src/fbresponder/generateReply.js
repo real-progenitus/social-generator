@@ -1,5 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
+import { callClaude } from "../lib/claudeClient.js";
 
 const SYSTEM_PROMPT =
   "You reply to comments and Messenger DMs on the ifound Facebook Page, on ifound's behalf.\n\n" +
@@ -158,8 +158,6 @@ export async function generateReply({
     return MOCK_REPLY;
   }
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
-
   const contextLines =
     renderHistory(history) +
     [
@@ -172,7 +170,9 @@ export async function generateReply({
       .join("\n") +
     (followUpTopic ? (FOLLOW_UP_NOTES[followUpTopic] ?? "") : "");
 
-  const response = await client.messages.create({
+  const response = await callClaude({
+    account: "ifound",
+    operation: "fbReply",
     model: config.claudeModel,
     max_tokens: 400,
     // Classification + short templated reply, not a reasoning task — skip

@@ -1,5 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
+import { callClaude } from "../lib/claudeClient.js";
 
 const CHECK_SCHEMA = {
   type: "object",
@@ -28,9 +28,9 @@ export async function factCheck(fact) {
     return { verdict: "pass", confidence: "high", issues: [] };
   }
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
-
-  const response = await client.messages.create({
+  const response = await callClaude({
+    account: config.account,
+    operation: "factCheck",
     model: config.claudeModel,
     max_tokens: 16000,
     system:

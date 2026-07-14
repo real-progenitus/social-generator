@@ -11,6 +11,7 @@ const USAGE = `Usage: node src/cli.js <command>
   serve            Serve the output/ dir over HTTP for the Instagram Graph API
   status           Show recent posts and their pipeline states
   fb-bot           Run the Facebook comment/message webhook + approval bot (run as a service)
+  metrics-server   Serve the AI cost + droplet-health dashboard (run as a service)
 `;
 
 // Every case imports its own dependencies lazily (dynamic import), scoped to
@@ -76,6 +77,11 @@ try {
     case "fb-bot": {
       const { startFbResponder } = await import("./fbresponder/main.js");
       await startFbResponder();
+      break;
+    }
+    case "metrics-server": {
+      const { serveMetrics } = await import("./metrics/server.js");
+      serveMetrics();
       break;
     }
     default:

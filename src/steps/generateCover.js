@@ -2,9 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
 import { recordUsedCommonsPhoto, usedCommonsPhotoUrls } from "../db.js";
+import { generateGrokImage } from "../lib/grokImage.js";
 import { fetchCommonsPhotos } from "./fetchCommonsPhoto.js";
-
-const XAI_IMAGES_URL = "https://api.x.ai/v1/images/generations";
 
 const MIME_BY_EXT = {
   ".jpg": "image/jpeg",
@@ -166,28 +165,11 @@ export async function generateCover(fact, outDir) {
   const prompt = buildPrompt(fact);
   console.log(`[generateCover] mode=${config.artistImageMode} prompt: ${prompt.slice(0, 120)}...`);
 
-  const res = await fetch(XAI_IMAGES_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.xaiApiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.grokImageModel,
-      prompt,
-      n: 1,
-      response_format: "b64_json",
-    }),
+  const b64 = await generateGrokImage({
+    prompt,
+    account: config.account,
+    operation: "cover",
   });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`xAI image API error ${res.status}: ${body}`);
-  }
-
-  const json = await res.json();
-  const b64 = json.data?.[0]?.b64_json;
-  if (!b64) throw new Error("xAI image API returned no image data");
 
   const file = path.join(outDir, "cover-raw.jpg");
   fs.writeFileSync(file, Buffer.from(b64, "base64"));

@@ -1,7 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 import { getTopicWeights, recentUsedFacts } from "../db.js";
-import { createWithSearch } from "../lib/anthropicSearch.js";
+import { callClaude } from "../lib/claudeClient.js";
 
 // Em dashes / double hyphens read as an obvious AI tell — strip them even if
 // the model ignores the system prompt instruction not to use them.
@@ -232,10 +231,12 @@ export async function generateFoodContent() {
       ? used.map((f) => `- ${f.headline}${f.artist_name ? ` (${f.artist_name})` : ""}`).join("\n")
       : "(none yet)";
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
   const schema = contentType === "recipe" ? RECIPE_SCHEMA : TRIVIA_SCHEMA;
 
-  const response = await createWithSearch(client, {
+  const response = await callClaude({
+    account: config.account,
+    operation: "generateFoodContent",
+    search: true,
     model: config.claudeModel,
     max_tokens: 16000,
     tools: [WEB_SEARCH_TOOL],

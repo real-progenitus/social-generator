@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Cost &amp; Droplet Health</title>
+<style>
+  :root {
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6;   /* blue  — magnitude / CPU */
+    --series-2: #1baf7a;   /* aqua  — memory */
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+      --series-2: #199e70;
+    }
+  }
+  :root[data-theme="dark"] {
+    --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #fff; --text-secondary: #c3c2b7;
+    --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,.10);
+    --series-1: #3987e5; --series-2: #199e70;
+  }
+  :root[data-theme="light"] {
+    --surface-1: #fcfcfb; --page: #f9f9f7; --text-primary: #0b0b0b; --text-secondary: #52514e;
+    --grid: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,.10);
+    --series-1: #2a78d6; --series-2: #1baf7a;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font-family: var(--font); font-size: 14px; line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 24px 20px 64px; }
+
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 20px; margin-bottom: 6px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 12.5px; }
+  .controls { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .ranges { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .ranges button {
+    appearance: none; border: 0; background: transparent; color: var(--text-secondary);
+    font: inherit; font-size: 12.5px; padding: 6px 11px; cursor: pointer;
+  }
+  .ranges button + button { border-left: 1px solid var(--border); }
+  .ranges button[aria-pressed="true"] { background: var(--series-1); color: #fff; }
+  .icon-btn {
+    appearance: none; border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-secondary); border-radius: 8px; padding: 6px 9px; cursor: pointer; font: inherit; font-size: 13px;
+  }
+
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+       font-weight: 650; margin: 30px 0 12px; }
+
+  .grid { display: grid; gap: 12px; }
+  .tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+  }
+  .tile .k { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .tile .v { font-size: 24px; font-weight: 650; letter-spacing: -0.02em; }
+  .tile .s { color: var(--text-secondary); font-size: 12px; margin-top: 3px; }
+
+  .panels { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); align-items: start; }
+  .panel-title { font-size: 13px; font-weight: 600; margin: 0 0 12px; }
+
+  /* HTML horizontal magnitude bars */
+  .bars { display: flex; flex-direction: column; gap: 8px; }
+  .bar-row { display: grid; grid-template-columns: minmax(96px, 34%) 1fr auto; align-items: center; gap: 10px; }
+  .bar-label { color: var(--text-secondary); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar-track { height: 12px; background: var(--grid); border-radius: 6px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 6px; background: var(--series-1); min-width: 2px; }
+  .bar-val { font-size: 12.5px; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .scroll { overflow-x: auto; }
+
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--text-secondary); margin: 2px 0 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  svg text { fill: var(--muted); font-size: 10.5px; }
+  .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+  .err { color: var(--critical); }
+  .foot { color: var(--muted); font-size: 11.5px; margin-top: 28px; }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>AI Cost &amp; Droplet Health</h1>
+      <div class="sub" id="subtitle">Loading…</div>
+    </div>
+    <div class="controls">
+      <div class="ranges" id="ranges">
+        <button data-range="24h">24h</button>
+        <button data-range="7d">7d</button>
+        <button data-range="30d">30d</button>
+        <button data-range="all">All</button>
+      </div>
+      <button class="icon-btn" id="theme" title="Toggle light/dark">◐</button>
+    </div>
+  </header>
+
+  <div id="app"><div class="empty">Loading…</div></div>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let range = "7d";
+let timer = null;
+
+// ---- formatting -----------------------------------------------------------
+const fmtUsd = (n) => n == null ? "—" : "$" + (Math.abs(n) < 1 ? n.toFixed(4) : n.toFixed(2));
+const fmtInt = (n) => (n ?? 0).toLocaleString("en-US");
+function fmtTokens(n) {
+  n = n ?? 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+  return String(n);
+}
+function fmtMs(n) {
+  if (n == null) return "—";
+  return n >= 1000 ? (n / 1000).toFixed(1) + "s" : Math.round(n) + "ms";
+}
+const fmtPct = (n) => n == null ? "—" : n.toFixed(0) + "%";
+const fmtGb = (n) => n == null ? "—" : n.toFixed(1);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function tile(k, v, s) {
+  return `<div class="card tile"><div class="k">${esc(k)}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`;
+}
+
+// HTML horizontal magnitude bars. items: [{label, value, display}]
+function hbars(items, { color = "var(--series-1)" } = {}) {
+  if (!items.length) return `<div class="empty">No data in this range.</div>`;
+  const max = Math.max(...items.map((i) => i.value), 0) || 1;
+  return `<div class="bars">` + items.map((i) => {
+    const w = Math.max(2, (i.value / max) * 100);
+    return `<div class="bar-row">
+      <div class="bar-label" title="${esc(i.label)}">${esc(i.label)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${w}%;background:${color}"></div></div>
+      <div class="bar-val">${i.display}</div>
+    </div>`;
+  }).join("") + `</div>`;
+}
+
+// SVG vertical bars for a time series of one measure. pts: [{label, value}]
+function vbars(pts, fmt) {
+  if (!pts.length) return `<div class="empty">No data in this range.</div>`;
+  const W = 640, H = 150, padL = 8, padR = 8, padB = 22, padT = 8;
+  const max = Math.max(...pts.map((p) => p.value), 0) || 1;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const bw = iw / pts.length;
+  const barW = Math.max(2, Math.min(bw - 3, 46));
+  const bars = pts.map((p, idx) => {
+    const h = (p.value / max) * ih;
+    const x = padL + idx * bw + (bw - barW) / 2;
+    const y = padT + ih - h;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" rx="3" fill="var(--series-1)"><title>${esc(p.label)}: ${esc(fmt(p.value))}</title></rect>`;
+  }).join("");
+  // sparse x labels: first, middle, last
+  const idxs = [...new Set([0, Math.floor(pts.length / 2), pts.length - 1])];
+  const labels = idxs.map((idx) => {
+    const x = padL + idx * bw + bw / 2;
+    const anchor = idx === 0 ? "start" : idx === pts.length - 1 ? "end" : "middle";
+    return `<text x="${x.toFixed(1)}" y="${H - 6}" text-anchor="${anchor}">${esc(pts[idx].label)}</text>`;
+  }).join("");
+  const top = `<text x="${padL}" y="12" text-anchor="start" fill="var(--text-secondary)">peak ${esc(fmt(max))}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="none" role="img">${bars}${labels}${top}</svg>`;
+}
+
+// SVG multi-line chart, shared 0..maxY axis. series: [{name,color,pts:[{value}]}]
+function lineChart(buckets, series, { maxY, fmt } = {}) {
+  if (!buckets.length) return `<div class="empty">No samples in this range.</div>`;
+  const W = 640, H = 170, padL = 34, padR = 10, padB = 22, padT = 10;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const top = maxY ?? Math.max(1, ...series.flatMap((s) => s.pts.map((p) => p.value ?? 0)));
+  const x = (idx) => padL + (buckets.length === 1 ? iw / 2 : (idx / (buckets.length - 1)) * iw);
+  const y = (v) => padT + ih - (Math.min(v, top) / top) * ih;
+  // gridlines at 0, 50%, 100% of top
+  const grid = [0, 0.5, 1].map((f) => {
+    const gy = padT + ih - f * ih;
+    return `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}" stroke="var(--grid)" stroke-width="1"/>
+            <text x="${padL - 6}" y="${(gy + 3).toFixed(1)}" text-anchor="end">${esc(fmt(f * top))}</text>`;
+  }).join("");
+  const lines = series.map((s) => {
+    const d = s.pts.map((p, idx) => `${idx === 0 ? "M" : "L"}${x(idx).toFixed(1)},${y(p.value ?? 0).toFixed(1)}`).join(" ");
+    const end = s.pts[s.pts.length - 1];
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>` +
+      (buckets.length === 1 ? `<circle cx="${x(0)}" cy="${y(end.value ?? 0)}" r="3.5" fill="${s.color}"/>` : "");
+  }).join("");
+  const idxs = [...new Set([0, Math.floor(buckets.length / 2), buckets.length - 1])];
+  const xl = idxs.map((idx) => {
+    const anchor = idx === 0 ? "start" : idx === buckets.length - 1 ? "end" : "middle";
+    return `<text x="${x(idx).toFixed(1)}" y="${H - 6}" text-anchor="${anchor}">${esc(buckets[idx])}</text>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">${grid}${lines}${xl}</svg>`;
+}
+
+function panel(title, inner, extra = "") {
+  return `<div class="card"><div class="panel-title">${esc(title)}</div>${extra}${inner}</div>`;
+}
+
+// ---- render ---------------------------------------------------------------
+function render(d) {
+  const t = d.totals;
+  const cacheTotal = t.cacheReadTokens + t.cacheCreationTokens;
+  const errRate = t.calls ? (t.errors / t.calls) * 100 : 0;
+
+  const tiles = [
+    tile("Total AI cost", fmtUsd(t.cost), `${fmtInt(t.calls)} calls`),
+    tile("Avg latency", fmtMs(t.avgLatencyMs), "per call"),
+    tile("Input tokens", fmtTokens(t.inputTokens), `${fmtTokens(cacheTotal)} cached`),
+    tile("Output tokens", fmtTokens(t.outputTokens)),
+    tile("Web searches", fmtInt(t.webSearches)),
+    tile("Images", fmtInt(t.images)),
+    tile("Errors", fmtInt(t.errors), errRate ? `${errRate.toFixed(1)}% of calls` : "none"),
+  ].join("");
+
+  const costSeries = d.series.map((b) => ({ label: shortBucket(b.bucket), value: b.cost }));
+
+  const costByModel = d.byModel.map((m) => ({ label: m.model, value: m.cost, display: fmtUsd(m.cost) }));
+  const callsByOp = d.byOperation.map((o) => ({ label: o.operation, value: o.calls, display: fmtInt(o.calls) }));
+  const latByOp = [...d.byOperation].filter((o) => o.avg != null).sort((a, b) => b.avg - a.avg)
+    .map((o) => ({ label: o.operation, value: o.avg, display: fmtMs(o.avg) }));
+
+  const modelRows = d.byModel.map((m) => `<tr>
+    <td>${esc(m.model)}</td><td>${fmtInt(m.calls)}</td>
+    <td>${fmtTokens(m.inputTokens)}</td><td>${fmtTokens(m.outputTokens)}</td>
+    <td>${fmtTokens(m.cacheReadTokens + m.cacheCreationTokens)}</td>
+    <td>${fmtMs(m.avg)}</td><td>${fmtMs(m.p95)}</td><td>${fmtUsd(m.cost)}</td>
+  </tr>`).join("") || `<tr><td colspan="8" class="empty">No calls in this range.</td></tr>`;
+
+  const acctRow = d.byAccount.map((a) => `<span class="pill">${esc(a.account)}: ${fmtUsd(a.cost)} · ${fmtInt(a.calls)}</span>`).join(" ");
+
+  // ---- system ----
+  const sys = d.system || {};
+  const cur = sys.current;
+  const sysTiles = cur ? [
+    tile("CPU", fmtPct(cur.cpu_pct), `load ${(cur.load1 ?? 0).toFixed(2)} / ${cur.cores} cores`, statusFor(cur.cpu_pct, 70, 90)),
+    tile("Memory", fmtPct(memPct(cur)), `${fmtGb((cur.mem_used_mb ?? 0) / 1024)} / ${fmtGb((cur.mem_total_mb ?? 0) / 1024)} GB`),
+    tile("Load / core", ((cur.load1 ?? 0) / (cur.cores || 1)).toFixed(2), loadHint(cur)),
+    tile("Swap used", fmtGb((cur.swap_used_mb ?? 0) / 1024) + " GB", cur.swap_total_mb ? `of ${fmtGb(cur.swap_total_mb / 1024)} GB` : "no swap"),
+    tile("Disk", fmtPct(diskPct(cur)), `${fmtGb(cur.disk_used_gb)} / ${fmtGb(cur.disk_total_gb)} GB`),
+  ].join("") : `<div class="empty">No system samples yet — the metrics server records one every 30s.</div>`;
+
+  const buckets = (sys.history || []).map((h) => shortBucket(h.bucket));
+  const sysTrend = lineChart(buckets, [
+    { name: "CPU %", color: "var(--series-1)", pts: (sys.history || []).map((h) => ({ value: h.cpu_pct ?? 0 })) },
+    { name: "Mem %", color: "var(--series-2)", pts: (sys.history || []).map((h) => ({ value: h.mem_total_mb ? (h.mem_used_mb / h.mem_total_mb) * 100 : 0 })) },
+  ], { maxY: 100, fmt: (v) => Math.round(v) + "%" });
+  const sysLegend = `<div class="legend"><span><span class="swatch" style="background:var(--series-1)"></span>CPU %</span><span><span class="swatch" style="background:var(--series-2)"></span>Memory %</span></div>`;
+
+  const procRows = (sys.processes || []).map((p) => `<tr>
+    <td>${esc(p.command)}</td><td>${(p.cpu_pct ?? 0).toFixed(1)}%</td><td>${(p.mem_pct ?? 0).toFixed(1)}%</td><td>${esc(p.pid)}</td>
+  </tr>`).join("") || `<tr><td colspan="4" class="empty">Process list unavailable on this host.</td></tr>`;
+
+  $("app").innerHTML = `
+    <h2>AI usage &amp; cost</h2>
+    <div class="grid tiles">${tiles}</div>
+    ${acctRow ? `<div style="margin-top:12px">${acctRow}</div>` : ""}
+
+    <div class="grid panels" style="margin-top:12px">
+      ${panel("Cost over time", vbars(costSeries, fmtUsd))}
+      ${panel("Cost by model", hbars(costByModel))}
+      ${panel("Calls by operation", hbars(callsByOp))}
+      ${panel("Avg latency by operation", hbars(latByOp, { color: "var(--series-2)" }))}
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="panel-title">Per-model detail</div>
+      <div class="scroll"><table>
+        <thead><tr><th>Model</th><th>Calls</th><th>In tok</th><th>Out tok</th><th>Cache tok</th><th>Avg</th><th>p95</th><th>Cost</th></tr></thead>
+        <tbody>${modelRows}</tbody>
+      </table></div>
+    </div>
+
+    <h2>Droplet health</h2>
+    <div class="grid tiles">${sysTiles}</div>
+    <div class="grid panels" style="margin-top:12px">
+      ${panel("CPU & memory over time", sysTrend, sysLegend)}
+      ${panel("Top processes by memory", `<div class="scroll"><table>
+        <thead><tr><th>Process</th><th>CPU</th><th>Mem</th><th>PID</th></tr></thead>
+        <tbody>${procRows}</tbody></table></div>`)}
+    </div>`;
+
+  $("subtitle").innerHTML = `${fmtInt(t.calls)} calls · ${fmtUsd(t.cost)} · updated ${new Date(d.generatedAt).toLocaleTimeString()}`;
+  $("foot").textContent = `Forward-collecting since instrumentation was deployed. Auto-refreshes every 30s. Costs are estimates from a configured price table — verify against provider invoices.`;
+}
+
+function statusFor(v, warn, crit) {
+  if (v == null) return "";
+  if (v >= crit) return `<span style="color:var(--critical)">high</span>`;
+  if (v >= warn) return `<span style="color:var(--warning)">busy</span>`;
+  return `<span style="color:var(--good)">healthy</span>`;
+}
+function loadHint(cur) {
+  const per = (cur.load1 ?? 0) / (cur.cores || 1);
+  return per >= 1 ? "saturated (≥1 = cores busy)" : "headroom available";
+}
+const memPct = (c) => c.mem_total_mb ? (c.mem_used_mb / c.mem_total_mb) * 100 : null;
+const diskPct = (c) => c.disk_total_gb ? (c.disk_used_gb / c.disk_total_gb) * 100 : null;
+
+function shortBucket(b) {
+  // 'YYYY-MM-DD' or 'YYYY-MM-DD HH:00'
+  if (!b) return "";
+  if (b.length > 10) return b.slice(11, 16); // HH:00
+  return b.slice(5); // MM-DD
+}
+
+// ---- data + wiring --------------------------------------------------------
+async function load() {
+  try {
+    const res = await fetch(`/api/summary?range=${range}`);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    render(await res.json());
+  } catch (err) {
+    $("app").innerHTML = `<div class="card err">Failed to load metrics: ${esc(err.message)}</div>`;
+  }
+}
+
+function setRange(r) {
+  range = r;
+  for (const b of $("ranges").children) b.setAttribute("aria-pressed", String(b.dataset.range === r));
+  load();
+}
+
+$("ranges").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-range]");
+  if (b) setRange(b.dataset.range);
+});
+$("theme").addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+});
+
+setRange("7d");
+timer = setInterval(load, 30_000);
+</script>
+</body>
+</html>
