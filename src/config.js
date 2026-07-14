@@ -10,6 +10,30 @@ export const config = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
   claudeModel: process.env.CLAUDE_MODEL ?? "claude-sonnet-5",
 
+  // DeepSeek (OpenAI-compatible, https://api.deepseek.com) — the cheap,
+  // knowledge-only half of the music account's A/B fact generation (see
+  // generateFact.js). deepseekShare is the fraction of *historical*-pillar
+  // posts routed to DeepSeek instead of the Claude+web_search flow; tunable via
+  // env so the split can be dialed without a deploy. NOTE: the deepseek-chat /
+  // deepseek-reasoner aliases deprecate 2026-07-24 in favor of
+  // deepseek-v4-flash — after that, set DEEPSEEK_MODEL=deepseek-v4-flash.
+  deepseekApiKey: process.env.DEEPSEEK_API_KEY ?? "",
+  deepseekModel: process.env.DEEPSEEK_MODEL ?? "deepseek-chat",
+  deepseekShare: Number(process.env.DEEPSEEK_SHARE ?? 0.5),
+
+  // Tavily search (https://api.tavily.com) — grounds the recent_news pillar,
+  // which DeepSeek's training cutoff can't cover. Free tier is 1,000
+  // searches/month; tavilyPriceUsd (per search) is 0 until that's exceeded.
+  tavilyApiKey: process.env.TAVILY_API_KEY ?? "",
+  tavilyPriceUsd: Number(process.env.TAVILY_PRICE_USD ?? 0),
+  // Optional comma-separated domain whitelist for the recent_news Tavily search,
+  // to keep results on electronic-music outlets and drop off-topic noise. Empty
+  // => generateFact.js falls back to its built-in RECENT_NEWS_DOMAINS list.
+  tavilyIncludeDomains: (process.env.TAVILY_INCLUDE_DOMAINS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+
   xaiApiKey: process.env.XAI_API_KEY ?? "",
   grokImageModel: process.env.GROK_IMAGE_MODEL ?? "grok-2-image",
   // Second model the food account's cover generator alternates in against

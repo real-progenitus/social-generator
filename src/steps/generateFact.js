@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { getTopicWeights, recentUsedFacts } from "../db.js";
 import { callClaude } from "../lib/claudeClient.js";
+import { callDeepSeek } from "../lib/deepseekClient.js";
+import { tavilySearch } from "../lib/tavilySearch.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const topicsFile = path.join(here, "..", "..", "data", "topics.json");
@@ -129,10 +131,10 @@ const FACT_SCHEMA = {
 const RECENT_NEWS_TOPIC = { topic: "recent_news", kind: "recent_news" };
 const RECENT_NEWS_BASE_WEIGHT = 34.75;
 
-function pickTopic() {
+function pickTopic({ excludeRecentNews = false } = {}) {
   const { topics } = JSON.parse(fs.readFileSync(topicsFile, "utf8"));
   const weights = getTopicWeights();
-  const pool = [...topics, RECENT_NEWS_TOPIC];
+  const pool = excludeRecentNews ? [...topics] : [...topics, RECENT_NEWS_TOPIC];
   const weighted = pool.map((t) => ({
     ...t,
     weight: weights[t.topic] ?? (t.kind === "recent_news" ? RECENT_NEWS_BASE_WEIGHT : 1.0),
@@ -175,22 +177,11 @@ const MOCK_FACT = {
 const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 6 };
 
 /**
- * Generate a fact + slide copy via the Claude API, grounded in a live web
- * search. Returns the validated fact object (shape of FACT_SCHEMA).
+ * Claude + live web_search fact generation — the original, most-grounded path,
+ * and the fallback when a cheaper path fails. Returns the validated fact
+ * (shape of FACT_SCHEMA), tagged with its generation method.
  */
-export async function generateFact() {
-  if (config.mockMode) {
-    console.log("[generateFact] MOCK_MODE — returning canned fact");
-    return sanitizeFact(MOCK_FACT);
-  }
-
-  const topic = pickTopic();
-  const used = recentUsedFacts(60);
-  const usedList =
-    used.length > 0
-      ? used.map((f) => `- ${f.headline}`).join("\n")
-      : "(none yet)";
-
+async function generateFactViaClaude(topic, usedList) {
   const response = await callClaude({
     account: config.accountLabel,
     operation: "generateFact",
@@ -256,13 +247,233 @@ export async function generateFact() {
   // nudge, and "recent_news" is that key regardless of which story ran today.
   if (topic.kind === "recent_news") fact.topic = "recent_news";
 
-  if (fact.slides.length < 4 || fact.slides.length > 6) {
-    throw new Error(
-      `Fact validation failed: expected 4-6 slides, got ${fact.slides.length}`,
-    );
+  validateFact(fact);
+  return tagFact(sanitizeFact(fact), "web_search_grounded");
+}
+
+// ---------------------------------------------------------------------------
+// DeepSeek paths. Historical pillars can be written from the model's own
+// training knowledge (no live search — far cheaper, and a test of whether the
+// search loop is what manufactures disputed facts). The recent_news pillar
+// can't: DeepSeek's training cutoff means "the last few weeks" must come from a
+// live search, so it's grounded with Tavily results instead. Both emit the
+// FACT_SCHEMA shape via JSON mode — which has no schema enforcement, so the
+// shape is described in the prompt and validated after parse.
+// ---------------------------------------------------------------------------
+
+// Mirror of the persona paragraph in generateFactViaClaude's system prompt —
+// keep the two in sync so both A/B arms target the same voice and scope.
+const PERSONA =
+  "You are the researcher-copywriter for an Instagram page that posts one well-sourced electronic music fact per day as a carousel. " +
+  "The page covers five content pillars: performance moments from big names, controversial innovations in music, " +
+  "culture-defining moments, random trivia about big bands/artists, and what's happening right now in the scene, " +
+  "always within electronic music. " +
+  "This account covers electronic music broadly, house and techno included, not just mainstream pop-EDM crossover " +
+  "acts: only feature artists, venues, festivals, and events that a casual electronic music fan would already " +
+  "recognize by name (think Daft Punk, Tomorrowland, Ibiza, Berghain, David Guetta, but equally Jeff Mills, " +
+  "Richie Hawtin, Carl Cox, major names within house/techno culture count too, not just pop chart stars). " +
+  "Avoid true deep-cuts only known within one hyper-niche scene. When a topic seed names a specific act or place, " +
+  "stick to that; otherwise default to the biggest, most widely known name available within its own genre. ";
+
+// Shared closing rules for the DeepSeek arms — equivalent to the Claude arm's,
+// minus the web_search-specific verification language.
+const WRITING_RULES =
+  "Keep the post to ONE core, well-established fact; every slide should restate or expand that fact or add " +
+  "widely-known context, not introduce extra shaky specifics. Avoid superlatives and 'first ever' claims unless they " +
+  "are firmly established. Do not attribute quotes or reactions to named people unless it is well-documented. Do not " +
+  "mischaracterize things (e.g. calling an indie label a 'major label'). " +
+  "Never invent quotes, dates, or chart positions. Write for music fans: concrete, specific, no filler. " +
+  "Never use em dashes or double hyphens anywhere in the output; write with periods, commas, colons, or parentheses instead. ";
+
+// JSON mode has no schema enforcement, so the exact shape (mirrors FACT_SCHEMA)
+// is spelled out here; the word "json" must appear for response_format to work.
+const JSON_SHAPE_INSTRUCTION =
+  "Respond with a single valid json object and nothing else (no markdown, no code fences), with exactly these keys: " +
+  "fact_type ('generic' or 'artist_specific'); " +
+  "artist_name (the artist or group the fact is about, or null when generic); " +
+  "image_subject (the single most recognizable real, photographable subject: an artist/group name, a specific venue " +
+  "like 'Berghain', or a festival like 'Tomorrowland'; null if the fact has no single real-world subject to photograph); " +
+  "topic (the topic seed this fact expands); " +
+  "headline (cover hook, max ~90 characters, punchy and factual, no clickbait); " +
+  "slides (an array of 4 to 6 short strings, each 1-3 sentences and standalone: the fact in detail, context, why it matters); " +
+  "source_note (brief factual grounding, the kind of documentation this is known from, not a URL); " +
+  "caption (Instagram caption: 1-2 sentences summarizing the fact plus 5-8 relevant hashtags); " +
+  "image_mood (10-20 words on emotional tone/atmosphere: mood, era, and energy only, with no artist, venue, festival, or song names and no other proper nouns).";
+
+const DEEPSEEK_KNOWLEDGE_RULES =
+  "Write from your own well-established knowledge; do not claim to have searched the web. Base every claim on widely " +
+  "documented facts you are highly confident are correct. Do not state shaky specifics (exact dates, numbers, 'firsts', " +
+  "quotes, chart positions) unless you are certain of them: if unsure, omit the detail, generalize it, or choose a " +
+  "different fact you are sure of. In source_note, name the kind of documentation this is known from (e.g. 'interviews " +
+  "and label history', 'contemporary press coverage'). ";
+
+/**
+ * DeepSeek knowledge-only fact generation for a historical pillar. Cheap, no
+ * live search. Returns the validated, method-tagged fact.
+ */
+async function generateFactViaDeepSeek(topic, usedList) {
+  const text = await callDeepSeek({
+    account: config.accountLabel,
+    operation: "generateFact",
+    model: config.deepseekModel,
+    jsonMode: true,
+    maxTokens: 4000,
+    system: PERSONA + DEEPSEEK_KNOWLEDGE_RULES + WRITING_RULES + JSON_SHAPE_INSTRUCTION,
+    user:
+      `Topic seed for today: "${topic.topic}"\n` +
+      `Content pillar: ${topic.kind} — ${CONTENT_PILLARS[topic.kind]}\n\n` +
+      "Produce one interesting, well-established, verifiable fact with carousel copy, matching the content pillar above.\n" +
+      'If the fact is fundamentally about one artist or group, set fact_type to "artist_specific" and fill artist_name; otherwise use "generic" with artist_name null.\n\n' +
+      `Already-posted facts, do NOT repeat or closely paraphrase any of these:\n${usedList}`,
+  });
+
+  const fact = parseFactJson(text);
+  validateFact(fact);
+  return tagFact(sanitizeFact(fact), "deepseek_knowledge");
+}
+
+const DEEPSEEK_NEWS_RULES =
+  "You are given the results of a live web search for what is happening in electronic music right now. Base every claim " +
+  "strictly on what these search results actually say; do not use your own memory for what is current, and do not add " +
+  "specifics the results do not support. Pick the single most compelling, clearly-supported current story. In source_note, " +
+  "name the kind of outlets reporting it (e.g. 'as reported by DJ Mag and Resident Advisor'), not a URL. ";
+
+// Default outlet whitelist for the recent_news search — keeps results on
+// electronic-music press so off-topic hits (local news, food festivals) don't
+// surface. Override per-deploy with TAVILY_INCLUDE_DOMAINS. billboard.com stays
+// in as a hedge so a big story covered only by mainstream press isn't missed.
+const RECENT_NEWS_DOMAINS = [
+  "residentadvisor.net",
+  "ra.co",
+  "mixmag.net",
+  "djmag.com",
+  "pitchfork.com",
+  "factmag.com",
+  "xlr8r.com",
+  "dancingastronaut.com",
+  "edm.com",
+  "6amgroup.com",
+  "beatportal.com",
+  "billboard.com",
+];
+
+/**
+ * recent_news fact generation, grounded in a live Tavily news search and
+ * written by DeepSeek. Replaces Claude's web_search for this pillar.
+ */
+async function generateRecentNewsViaTavily(usedList) {
+  const { answer, results } = await tavilySearch({
+    account: config.accountLabel,
+    operation: "recentNewsSearch",
+    query: "latest electronic music news: festivals, DJ sets, new releases, house, techno",
+    topic: "news",
+    days: 14,
+    maxResults: 6,
+    includeDomains: config.tavilyIncludeDomains.length ? config.tavilyIncludeDomains : RECENT_NEWS_DOMAINS,
+  });
+  if (results.length === 0) throw new Error("Tavily returned no recent-news results");
+
+  const sources =
+    (answer ? `Search summary: ${answer}\n\n` : "") +
+    results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`).join("\n\n");
+
+  const text = await callDeepSeek({
+    account: config.accountLabel,
+    operation: "generateFact",
+    model: config.deepseekModel,
+    jsonMode: true,
+    maxTokens: 4000,
+    system: PERSONA + DEEPSEEK_NEWS_RULES + WRITING_RULES + JSON_SHAPE_INSTRUCTION,
+    user:
+      `Content pillar: recent_news — ${CONTENT_PILLARS.recent_news}\n\n` +
+      `Live search results (most recent electronic music news):\n${sources}\n\n` +
+      "Write one post about the single most compelling, clearly-supported current story from these results, with carousel copy.\n" +
+      'Set fact_type to "artist_specific" with artist_name if the story centers on one act, otherwise "generic" with artist_name null.\n\n' +
+      `Already-posted facts, do NOT repeat or closely paraphrase any of these:\n${usedList}`,
+  });
+
+  const fact = parseFactJson(text);
+  fact.topic = "recent_news"; // stable pillar key for analytics, as in the Claude path
+  validateFact(fact);
+  return tagFact(sanitizeFact(fact), "tavily_news_deepseek");
+}
+
+// JSON mode should return bare JSON, but strip stray code fences defensively.
+function parseFactJson(text) {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  return JSON.parse(cleaned);
+}
+
+function validateFact(fact) {
+  if (!Array.isArray(fact.slides) || fact.slides.length < 4 || fact.slides.length > 6) {
+    throw new Error(`Fact validation failed: expected 4-6 slides, got ${fact.slides?.length}`);
   }
   if (fact.fact_type === "artist_specific" && !fact.artist_name) {
     throw new Error("Fact validation failed: artist_specific without artist_name");
   }
-  return sanitizeFact(fact);
+}
+
+// Tag the generation method so pipeline.js persists it to fact_check_json and
+// the dashboard/analytics can tell the A/B arms apart. The extra key rides
+// harmlessly in fact_json; renderers read only the known fields.
+function tagFact(fact, method) {
+  return { ...fact, fact_check: { method } };
+}
+
+/**
+ * Music-account content entry point. `flow` (from the Telegram /generate picker)
+ * forces a path; omitted/"auto" uses the default A/B dispatch:
+ *   - recent_news  → always Tavily+DeepSeek
+ *   - "deepseek"   → DeepSeek knowledge on a historical pillar
+ *   - "claude"     → Claude web_search on a historical pillar
+ *   - auto         → recent_news→Tavily; historical split by config.deepseekShare
+ * The DeepSeek/Tavily paths fall back to Claude on any error, so a run never
+ * fails to produce a post.
+ */
+export async function generateFact({ flow } = {}) {
+  if (config.mockMode) {
+    console.log("[generateFact] MOCK_MODE — returning canned fact");
+    return tagFact(sanitizeFact(MOCK_FACT), "mock");
+  }
+
+  const used = recentUsedFacts(60);
+  const usedList = used.length > 0 ? used.map((f) => `- ${f.headline}`).join("\n") : "(none yet)";
+
+  // Fall back to the (always-available) Claude web_search path if a cheaper
+  // path throws; `topic` is what that fallback should research.
+  const withClaudeFallback = async (topic, label, fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      console.warn(`[generateFact] ${label} failed (${err.message}); falling back to Claude web_search`);
+      return generateFactViaClaude(topic, usedList);
+    }
+  };
+
+  // Explicit flow from the Telegram picker overrides the A/B split.
+  if (flow === "recent_news") {
+    return withClaudeFallback(RECENT_NEWS_TOPIC, "recent_news via Tavily+DeepSeek", () => generateRecentNewsViaTavily(usedList));
+  }
+  if (flow === "deepseek") {
+    const topic = pickTopic({ excludeRecentNews: true });
+    console.log(`[generateFact] forced DeepSeek (${config.deepseekModel}) for "${topic.topic}"`);
+    return withClaudeFallback(topic, "DeepSeek knowledge path", () => generateFactViaDeepSeek(topic, usedList));
+  }
+  if (flow === "claude") {
+    const topic = pickTopic({ excludeRecentNews: true });
+    console.log(`[generateFact] forced Claude web_search for "${topic.topic}"`);
+    return generateFactViaClaude(topic, usedList);
+  }
+
+  // Default: auto A/B dispatch.
+  const topic = pickTopic();
+  if (topic.kind === "recent_news") {
+    return withClaudeFallback(topic, "recent_news via Tavily+DeepSeek", () => generateRecentNewsViaTavily(usedList));
+  }
+  if (Math.random() < config.deepseekShare) {
+    console.log(`[generateFact] routing "${topic.topic}" to DeepSeek (${config.deepseekModel})`);
+    return withClaudeFallback(topic, "DeepSeek knowledge path", () => generateFactViaDeepSeek(topic, usedList));
+  }
+  console.log(`[generateFact] routing "${topic.topic}" to Claude web_search`);
+  return generateFactViaClaude(topic, usedList);
 }

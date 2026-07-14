@@ -84,6 +84,16 @@ const CLAUDE_PRICING = {
 // Anthropic web search: $10 per 1,000 requests.
 const WEB_SEARCH_PER_REQUEST = 10 / 1000;
 
+// DeepSeek $/MTok (V4 Flash, which deepseek-chat/deepseek-v4-flash both route
+// to). cache-hit input is a ~98% discount off cache-miss. Keyed for both ids so
+// the 2026-07-24 alias→v4-flash rename is a DEEPSEEK_MODEL env change, not a
+// code edit. Unknown model → cost null, tokens still recorded (as with Claude).
+const DEEPSEEK_FLASH_RATES = { input: 0.14, cacheRead: 0.0028, output: 0.28 };
+const DEEPSEEK_PRICING = {
+  "deepseek-chat": DEEPSEEK_FLASH_RATES,
+  "deepseek-v4-flash": DEEPSEEK_FLASH_RATES,
+};
+
 // xAI image price per generated image, keyed by model (docs.x.ai, 1024x1024
 // output — close enough to these carousels' portrait dimensions). Needed
 // per-model rather than one flat rate now that generateFoodCover.js
@@ -117,6 +127,16 @@ function claudeCost({ inputTokens, outputTokens, cacheReadTokens, cacheCreationT
       cacheCreationTokens * r.cacheWrite) /
       MTOK +
     webSearchCount * WEB_SEARCH_PER_REQUEST
+  );
+}
+
+// DeepSeek splits prompt tokens into cache-hit vs cache-miss; each is priced
+// differently, so cost is computed from the split, not the summed total.
+function deepseekCost({ cacheMissTokens, cacheHitTokens, outputTokens, model }) {
+  const r = DEEPSEEK_PRICING[model];
+  if (!r) return null; // unknown model — still record tokens/latency, cost null
+  return (
+    (cacheMissTokens * r.input + cacheHitTokens * r.cacheRead + outputTokens * r.output) / MTOK
   );
 }
 
@@ -175,6 +195,62 @@ export function recordClaudeCall({ account, model, operation, durationMs, usage 
       webSearchCount,
       model,
     }),
+    status,
+    error_msg: error ? String(error.message ?? error).slice(0, 500) : null,
+  });
+}
+
+/**
+ * Record one DeepSeek chat-completion call. `usage` is the OpenAI-style usage
+ * object DeepSeek returns: prompt_tokens (total input), completion_tokens, and
+ * the prompt_cache_hit_tokens / prompt_cache_miss_tokens split of the input.
+ */
+export function recordDeepSeekCall({ account, model, operation, durationMs, usage = {}, status = "ok", error }) {
+  const promptTokens = usage.prompt_tokens ?? 0;
+  const outputTokens = usage.completion_tokens ?? 0;
+  const cacheHitTokens = usage.prompt_cache_hit_tokens ?? 0;
+  // Fall back to (prompt - hit) when the miss field is absent, so cost is still
+  // right on responses that only report the hit count.
+  const cacheMissTokens = usage.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - cacheHitTokens);
+
+  safeInsert({
+    account: account ?? null,
+    provider: "deepseek",
+    model: model ?? null,
+    operation: operation ?? null,
+    duration_ms: durationMs ?? null,
+    input_tokens: promptTokens,
+    output_tokens: outputTokens,
+    cache_read_tokens: cacheHitTokens,
+    cache_creation_tokens: 0,
+    web_search_count: 0,
+    image_count: 0,
+    cost_usd: deepseekCost({ cacheMissTokens, cacheHitTokens, outputTokens, model }),
+    status,
+    error_msg: error ? String(error.message ?? error).slice(0, 500) : null,
+  });
+}
+
+/**
+ * Record one external search-provider call (e.g. Tavily) used to ground a fact.
+ * Cost is per query; the count lands in web_search_count so the dashboard's
+ * "Web" column reflects every search regardless of provider.
+ */
+export function recordSearchCall({ account, provider, operation, durationMs, queries = 1, unitPrice = 0, status = "ok", error }) {
+  const count = status === "ok" ? queries : 0;
+  safeInsert({
+    account: account ?? null,
+    provider: provider ?? "search",
+    model: null,
+    operation: operation ?? null,
+    duration_ms: durationMs ?? null,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    web_search_count: count,
+    image_count: 0,
+    cost_usd: count * unitPrice,
     status,
     error_msg: error ? String(error.message ?? error).slice(0, 500) : null,
   });

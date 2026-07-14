@@ -6,6 +6,25 @@ import { tg } from "../lib/telegram.js";
 import { runPipeline } from "../pipeline.js";
 import { publishPost } from "./publish.js";
 
+// Generation flows offered by the /generate picker (callback_data `gen:<key>`).
+// "auto" = the default A/B dispatch; the others force a single path.
+const FLOWS = {
+  auto: "🎲 Auto (50/50 split)",
+  claude: "🔍 Claude + web search",
+  deepseek: "🧠 DeepSeek (knowledge)",
+  recent_news: "📰 Recent news (Tavily)",
+};
+
+// Human labels for the method tagged onto each fact (fact.fact_check.method),
+// shown in the approval message so you can see which source produced the post.
+const METHOD_LABELS = {
+  web_search_grounded: "🔍 Claude + web search",
+  deepseek_knowledge: "🧠 DeepSeek (knowledge)",
+  tavily_news_deepseek: "📰 Tavily news + DeepSeek",
+  mock: "🧪 mock",
+};
+const methodLabel = (m) => METHOD_LABELS[m] ?? m ?? "unknown";
+
 /**
  * Send the rendered carousel + fact text to the review chat with
  * Approve / Reject buttons. The pipeline then exits; `npm run poll`
@@ -29,6 +48,7 @@ export async function sendForReview(postId, fact, slidePaths) {
       `📋 Post #${postId} awaiting review\n\n` +
       `${fact.headline}\n\n` +
       `Type: ${fact.fact_type}${fact.artist_name ? ` (${fact.artist_name})` : ""}\n` +
+      `Generated via: ${methodLabel(fact.fact_check?.method)}\n` +
       `Source: ${fact.source_note}\n\n` +
       `Caption:\n${fact.caption}`,
     reply_markup: {
@@ -75,6 +95,17 @@ async function doPublish(postId) {
 
 async function handleCallback(cb) {
   const [action, idStr] = String(cb.data ?? "").split(":");
+
+  // /generate flow picker — idStr is the flow key, not a post id.
+  if (action === "gen") {
+    await tg("answerCallbackQuery", { callback_query_id: cb.id });
+    if (!FLOWS[idStr]) {
+      await tg("sendMessage", { chat_id: config.telegramChatId, text: `Unknown flow: ${idStr}` });
+      return;
+    }
+    return runGenerate(idStr);
+  }
+
   const postId = Number(idStr);
   const post = getPost(postId);
 
@@ -130,13 +161,38 @@ async function handleMessage(msg) {
     return;
   }
 
+  // Don't run immediately — let the user pick which generation flow to use.
+  await tg("sendMessage", {
+    chat_id: config.telegramChatId,
+    text: "🎛️ Which generation flow?",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: FLOWS.auto, callback_data: "gen:auto" }],
+        [{ text: FLOWS.claude, callback_data: "gen:claude" }],
+        [{ text: FLOWS.deepseek, callback_data: "gen:deepseek" }],
+        [{ text: FLOWS.recent_news, callback_data: "gen:recent_news" }],
+      ],
+    },
+  });
+}
+
+/** Run the pipeline for a chosen flow ("auto" => default A/B dispatch). */
+async function runGenerate(flow) {
+  if (generateInProgress) {
+    await tg("sendMessage", {
+      chat_id: config.telegramChatId,
+      text: "⏳ Already generating a post — hang tight.",
+    });
+    return;
+  }
+
   generateInProgress = true;
   await tg("sendMessage", {
     chat_id: config.telegramChatId,
-    text: "⏳ Generating a new post…",
+    text: `⏳ Generating via ${FLOWS[flow]}…`,
   });
   try {
-    const postId = await runPipeline();
+    const postId = await runPipeline({ flow: flow === "auto" ? undefined : flow });
     // When REVIEW_REQUIRED=false, runPipeline publishes directly with no
     // Telegram message of its own, so confirm here. Otherwise sendForReview
     // already posted the carousel + approve/reject buttons.

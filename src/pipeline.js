@@ -35,8 +35,8 @@ async function loadAccountSteps() {
  * There is no separate fact-check call: generateFact grounds every claim in a
  * live web search, and the Telegram approval step is the final human gate.
  */
-export async function runPipeline() {
-  console.log(`[pipeline] account=${config.account} handle=${config.postHandle}`);
+export async function runPipeline({ flow } = {}) {
+  console.log(`[pipeline] account=${config.account} handle=${config.postHandle}${flow ? ` flow=${flow}` : ""}`);
   if (!config.mockMode) {
     const required = ["anthropicApiKey"];
     if (!config.localCoverImage) required.push("xaiApiKey");
@@ -45,13 +45,18 @@ export async function runPipeline() {
 
   const { generateContent, generateCoverImage, renderSlideImages } = await loadAccountSteps();
 
-  const fact = await generateContent();
+  // `flow` (music account only) forces a generation path; the food generator
+  // ignores the extra arg.
+  const fact = await generateContent({ flow });
   console.log(`[pipeline] generated: "${fact.headline}"`);
 
   const postId = createPost(fact);
   updatePost(postId, {
     status: "fact_checked",
-    fact_check_json: JSON.stringify({ method: "web_search_grounded" }),
+    // The music dispatcher tags each fact with the path that produced it
+    // (web_search_grounded | deepseek_knowledge | tavily_news_deepseek); the
+    // food path has no fact_check, so it keeps the default.
+    fact_check_json: JSON.stringify(fact.fact_check ?? { method: "web_search_grounded" }),
     caption: fact.caption,
   });
   recordUsedFact(fact);
