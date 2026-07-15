@@ -57,3 +57,20 @@ export async function fetchPostContext(postId) {
     return "";
   }
 }
+
+// Sender's Messenger account locale (e.g. "es_CO"), used as a language hint
+// for image-only DMs that carry no text to detect language from. Meta has
+// restricted several User Profile API fields (first_name, last_name,
+// profile_pic) behind business-verification gates in recent years, and
+// whether "locale" still returns real data for arbitrary PSIDs is unverified
+// here - so this must degrade to null on any error or empty response, never
+// throw, so callers can always fall back to today's default behavior.
+export async function fetchUserLocale(psid) {
+  try {
+    const { locale } = await graph("GET", psid, { fields: "locale" });
+    return locale || null;
+  } catch (err) {
+    console.error(`[fbresponder/graph] failed to fetch locale for ${psid}:`, err.message);
+    return null;
+  }
+}

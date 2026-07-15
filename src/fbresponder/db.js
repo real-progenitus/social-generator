@@ -54,6 +54,20 @@ db.exec(`
   );
 `);
 
+// Caches each sender's Messenger account locale (or NULL if we looked it up
+// and got nothing back - still a cache hit, so a failed/empty lookup isn't
+// retried on every image-only message). No TTL: account locale essentially
+// never changes, and this only gates a fallback path (image-only DMs with no
+// text to detect language from), so indefinite caching is the simplest
+// correct choice.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sender_locales (
+    from_id TEXT PRIMARY KEY,
+    locale TEXT,
+    checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
 // Topics that get a proactive "did this work out?" nudge if the sender goes
 // quiet for an hour — shared between the scheduling check in webhook.js and
 // the due-nudge query below, so the two can't drift apart.
@@ -85,6 +99,23 @@ export function isPaused(fromId) {
        WHERE from_id = ? AND paused_at > datetime('now', '-' || ? || ' hours')`,
     )
     .get(fromId, PAUSE_AUTO_EXPIRE_HOURS);
+}
+
+// { cached: true, locale: string|null } if we've already looked this sender
+// up (locale may legitimately be null - Meta returned nothing); { cached:
+// false } if we've never checked, so the caller knows to call
+// fetchUserLocale() and record the result via setSenderLocale().
+export function getSenderLocale(fromId) {
+  if (!fromId) return { cached: false };
+  const row = db.prepare("SELECT locale FROM sender_locales WHERE from_id = ?").get(fromId);
+  return row ? { cached: true, locale: row.locale } : { cached: false };
+}
+
+export function setSenderLocale(fromId, locale) {
+  db.prepare(
+    `INSERT INTO sender_locales (from_id, locale, checked_at) VALUES (?, ?, datetime('now'))
+     ON CONFLICT(from_id) DO UPDATE SET locale = excluded.locale, checked_at = excluded.checked_at`,
+  ).run(fromId, locale);
 }
 
 export function eventExists(platformEventId) {

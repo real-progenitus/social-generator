@@ -7,13 +7,21 @@ import {
   findPendingNudge,
   FOLLOW_UP_TOPICS,
   getEvent,
+  getSenderLocale,
   hasNewerMessageFrom,
   isPaused,
   recentEventsFrom,
+  setSenderLocale,
   updateEvent,
 } from "./db.js";
 import { generateReply } from "./generateReply.js";
-import { fetchPostContext, replyToComment, sendMessengerMessage, sendTypingOn } from "./graph.js";
+import {
+  fetchPostContext,
+  fetchUserLocale,
+  replyToComment,
+  sendMessengerMessage,
+  sendTypingOn,
+} from "./graph.js";
 import { notifyFbSent, notifyPausedIncoming, sendForFbApproval } from "./review.js";
 
 // A sender currently under human takeover gets no AI call at all (that's the
@@ -262,6 +270,23 @@ async function handleMessagingEvent(messaging) {
   // Exclude this row from its own history; the earlier, still-unanswered burst
   // messages remain so the single reply addresses everything they said.
   const history = recentEventsFrom(senderId, "message", { excludeId: eventId });
+
+  // Image-only DMs have no text to detect language from, and if this is also
+  // the sender's first message, no history either — the account's own
+  // Messenger locale is a real signal instead of blindly guessing Portuguese.
+  // Cached indefinitely per sender (see db.js), so this only ever costs one
+  // Graph API call per sender's lifetime, not per message.
+  let accountLocale = null;
+  if (imageOnly) {
+    const cached = getSenderLocale(senderId);
+    if (cached.cached) {
+      accountLocale = cached.locale;
+    } else {
+      accountLocale = await fetchUserLocale(senderId);
+      setSenderLocale(senderId, accountLocale);
+    }
+  }
+
   let proposedReply;
   let topic;
   try {
@@ -271,6 +296,7 @@ async function handleMessagingEvent(messaging) {
       history,
       followUpTopic: pendingNudge?.topic ?? null,
       imageOnly,
+      accountLocale,
     }));
   } catch (err) {
     updateEvent(eventId, { status: "failed" });

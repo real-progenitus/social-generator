@@ -14,12 +14,25 @@ const SYSTEM_PROMPT =
   "informação). If the message has zero decisive markers either way (e.g. a single ambiguous word like " +
   "\"como\" with no accent, or \"gato\"), fall back to overall spelling patterns, and if still unsure, " +
   "Portuguese is the safer default for this Page - but always prefer a decisive marker over that default. " +
+  "Decisive markers count wherever they appear in the message, including inside proper nouns, place names, " +
+  "brand names, or addresses - a marker is a spelling fact about the text, not a judgment about whether the " +
+  "surrounding word is \"real\" vocabulary. For example, a message that is nothing but place names, like " +
+  "\"Colombia sucre Coveñas\", still contains a decisive Spanish marker (\"ñ\" in \"Coveñas\") and must be " +
+  "treated as Spanish, even though none of the three words are common vocabulary. Do not treat a message as " +
+  "\"unclassifiable\" or \"just names\" and fall back to the safer default just because it lacks ordinary " +
+  "sentence structure - scan it for markers exactly as you would a full sentence. This applies to every " +
+  "language pair, not only Spanish/Portuguese. " +
   "Once you've picked a language, write the ENTIRE reply in that language only, greeting included - never " +
   "mix languages in one reply (e.g. don't open with Portuguese \"Olá\" and then switch to Spanish, or vice " +
-  "versa). IMPORTANT: detect the language fresh from the CURRENT message every time, even if prior turns " +
-  "below were in a different language - a sender can switch languages mid-conversation (e.g. starts in " +
-  "English, then switches to Spanish), and your reply must follow whatever language the current message is " +
-  "in, not the language of earlier turns.\n\n" +
+  "versa). IMPORTANT: detect the language fresh from the CURRENT message's own text, in isolation, every " +
+  "time - do not let the language of your own previous reply (the most recent \"You:\" line directly above, " +
+  "if any) or any earlier turn influence this detection; imagine the current message is the very first " +
+  "thing anyone said and re-run the marker scan on it alone. A sender can switch languages mid-conversation " +
+  "(e.g. starts in English, then switches to Spanish), and your reply must follow whatever language the " +
+  "current message is in, not the language of earlier turns or of your own last reply. Only fall back to " +
+  "matching the conversation's earlier language when the current message truly has zero decisive markers of " +
+  "its own and is too short or ambiguous to judge alone (this is the same \"safer default\" fallback " +
+  "described above, not a separate rule).\n\n" +
   "PRODUCT KNOWLEDGE (use this, don't invent details):\n" +
   "ifound is a map-based, community-sourced lost & found app for iOS and Android. Anyone can post a lost or found " +
   "item and it appears on the map, visible for 2 months. Red pins are lost items reported, blue pins are found " +
@@ -134,6 +147,17 @@ const SYSTEM_PROMPT =
 const REPLY_SCHEMA = {
   type: "object",
   properties: {
+    // Ordered before `reply` deliberately - structured JSON output generates
+    // fields in declared property order, and thinking is disabled for this
+    // call (see callClaude below), so this is the model's only scratch space
+    // to commit to a language before writing the reply itself.
+    detected_language: {
+      type: "string",
+      description:
+        "The sender's language for THIS message only, per STEP 0's decisive-marker rules, expressed as a " +
+        "short language name (e.g. \"Portuguese\", \"Spanish\", \"English\"). Decide this before writing " +
+        "the reply.",
+    },
     reply: { type: "string", description: "The reply text to send to the user, following all rules above." },
     topic: {
       type: "string",
@@ -144,7 +168,7 @@ const REPLY_SCHEMA = {
         "the sender is reporting, or trying to report, a lost/found item. 'other' for everything else.",
     },
   },
-  required: ["reply", "topic"],
+  required: ["detected_language", "reply", "topic"],
   additionalProperties: false,
 };
 
@@ -171,6 +195,34 @@ const IMAGE_ONLY_NOTE =
   "download-and-post redirect (greeting + link + steps). You cannot detect language from an image, so reply " +
   "in the language of the earlier turns if there are any, otherwise fall back to European Portuguese.";
 
+// Maps a Messenger account locale prefix to a language name for the
+// image-only hint below. Generalized beyond just PT/ES since a sender's
+// account could be set to any locale, not only the two languages this Page
+// has seen so far.
+const LOCALE_LANGUAGE_MAP = {
+  es: "Spanish",
+  pt: "Portuguese",
+  en: "English",
+  fr: "French",
+  it: "Italian",
+  de: "German",
+};
+
+// Only meaningful for image-only messages (see IMAGE_ONLY_NOTE) — a real
+// account-locale signal beats blindly guessing Portuguese when there's no
+// text and possibly no history either. Additive: if locale is unavailable or
+// unrecognized, IMAGE_ONLY_NOTE's own existing fallback chain is untouched.
+function accountLocaleHint(accountLocale) {
+  if (!accountLocale) return "";
+  const language = LOCALE_LANGUAGE_MAP[accountLocale.split(/[_-]/)[0].toLowerCase()];
+  if (!language) return "";
+  return (
+    `\n\nThe sender's Facebook account locale is "${accountLocale}" (${language}) - since the image ` +
+    "itself carries no language signal, use this as your best guess for the reply language, unless earlier " +
+    "turns in this conversation clearly established a different language."
+  );
+}
+
 // Notes appended when this message is closing the loop on a proactive
 // follow-up nudge (see followup.js) - keyed by the topic of the nudge that
 // was sent, since "did the photo work?" and "did you manage to post?" need
@@ -187,6 +239,75 @@ const FOLLOW_UP_NOTES = {
     "haven't posted yet or ran into trouble, help them along using the posting flow steps above - don't just " +
     "repeat the download link if it sounds like they already have the app.",
 };
+
+// Deterministic backstop for the exact failure mode that motivated this file's
+// STEP 0 rewrite: Haiku missed a decisive "ñ" marker buried in a message that
+// was just proper nouns ("Colombia sucre Coveñas"). This is intentionally a
+// NARROWER list than STEP 0's own marker list above, not a duplicate of it -
+// "ll" is fine for the model to weigh in context, but as a blind substring
+// match it hits ordinary English ("call", "hello", "well"), so it's excluded
+// here; likewise unaccented "que"/"como"/"donde"/"tu" stay excluded since
+// they're the known PT/ES overlap words. Do not "fix" this divergence by
+// making the two lists identical - that would reintroduce false positives.
+const SPANISH_MARKERS = [
+  /ñ/i,
+  /¿/,
+  /¡/,
+  /\bqué\b/i,
+  /\bcómo\b/i,
+  /\bdónde\b/i,
+  /\btú\b/i,
+  /\bgracias\b/i,
+  /\bhola\b/i,
+  /\bustedes\b/i,
+  /\bseñor\b/i,
+  /\bseñora\b/i,
+];
+const PORTUGUESE_MARKERS = [
+  /ã/i,
+  /õ/i,
+  /\bobrigado\b/i,
+  /\bobrigada\b/i,
+  /\bvocê\b/i,
+  /\bnão\b/i,
+  /\btá\b/i,
+];
+
+function firstMatch(text, markers) {
+  for (const re of markers) {
+    const m = text.match(re);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+// Only emit a hint when exactly one side matches - if both or neither match,
+// the deterministic signal is itself ambiguous, so stay silent and defer
+// entirely to the model's own STEP 0 judgment rather than injecting a
+// confident claim from an inconclusive scan.
+function detectLanguageHint(content) {
+  const es = firstMatch(content, SPANISH_MARKERS);
+  const pt = firstMatch(content, PORTUGUESE_MARKERS);
+  if (es && !pt) {
+    return (
+      `\n\nDETECTED LANGUAGE HINT: this message's text contains "${es}", a decisive Spanish/Portuguese ` +
+      "marker per STEP 0 above (deterministic scan, not a model judgment) - treat this message as Spanish " +
+      "unless something else in this same message is a clearly stronger, more decisive marker for a " +
+      "different language. Do not let this be overridden by the language of prior turns or your own earlier " +
+      "reply."
+    );
+  }
+  if (pt && !es) {
+    return (
+      `\n\nDETECTED LANGUAGE HINT: this message's text contains "${pt}", a decisive Spanish/Portuguese ` +
+      "marker per STEP 0 above (deterministic scan, not a model judgment) - treat this message as " +
+      "Portuguese unless something else in this same message is a clearly stronger, more decisive marker " +
+      "for a different language. Do not let this be overridden by the language of prior turns or your own " +
+      "earlier reply."
+    );
+  }
+  return "";
+}
 
 function renderHistory(history) {
   if (!history || history.length === 0) return "";
@@ -206,6 +327,7 @@ export async function generateReply({
   history,
   followUpTopic = null,
   imageOnly = false,
+  accountLocale = null,
 }) {
   if (config.mockMode) {
     console.log("[fbresponder/generateReply] MOCK_MODE — returning canned reply");
@@ -222,7 +344,8 @@ export async function generateReply({
     ]
       .filter(Boolean)
       .join("\n") +
-    (imageOnly ? IMAGE_ONLY_NOTE : "") +
+    (imageOnly ? "" : detectLanguageHint(content)) +
+    (imageOnly ? IMAGE_ONLY_NOTE + accountLocaleHint(accountLocale) : "") +
     (followUpTopic ? (FOLLOW_UP_NOTES[followUpTopic] ?? "") : "");
 
   const response = await callClaude({
@@ -243,6 +366,7 @@ export async function generateReply({
 
   const text = response.content.find((b) => b.type === "text")?.text ?? "{}";
   const parsed = JSON.parse(text);
+  console.log(`[fbresponder/generateReply] detected_language: ${parsed.detected_language ?? "(none)"}`);
   return {
     reply: (parsed.reply ?? "").trim(),
     // Preserve whichever follow-up-eligible topic the model chose — collapsing
