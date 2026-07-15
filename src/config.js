@@ -34,6 +34,15 @@ export const config = {
     .map((s) => s.trim())
     .filter(Boolean),
 
+  // Fraction of bitemeweekly posts that get a live Claude web_search (the rest
+  // write from the model's own training knowledge — see generateFoodContent.js).
+  // Healthy recipes and food trivia don't go stale like bass_vault's
+  // recent_news pillar does — there's no "breaking food news" cycle worth
+  // paying Anthropic's $10/1,000-request web_search fee (plus extra
+  // search-result tokens) for. Defaults to 0: all knowledge-only. Tunable via
+  // env without a deploy if that ever changes.
+  foodSearchShare: Number(process.env.FOOD_SEARCH_SHARE ?? 0),
+
   xaiApiKey: process.env.XAI_API_KEY ?? "",
   grokImageModel: process.env.GROK_IMAGE_MODEL ?? "grok-2-image",
   // Second model the food account's cover generator alternates in against

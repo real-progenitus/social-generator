@@ -51,8 +51,9 @@ const RECIPE_SCHEMA = {
     trend_source: {
       type: "string",
       description:
-        "One sentence on what your search results show is trending right now about this dish/ingredient/style " +
-        "— for the human reviewer, not shown on the slides.",
+        "One sentence for the human reviewer on why this pick works right now: cite what your search results show " +
+        "is trending if you searched, or why it's a reliably popular choice if you're writing from memory. Not shown " +
+        "on the slides.",
     },
     servings: { type: "string", description: "e.g. '2 servings'" },
     prep_time: { type: "string", description: "e.g. '10 min'" },
@@ -110,7 +111,9 @@ const TRIVIA_SCHEMA = {
     },
     trend_source: {
       type: "string",
-      description: "One sentence on what makes this timely right now — for the human reviewer, not shown on-slide.",
+      description:
+        "One sentence for the human reviewer on what makes this timely if you searched, or why it's a reliably " +
+        "well-loved fact if you're writing from memory. Not shown on-slide.",
     },
     slides: {
       type: "array",
@@ -195,28 +198,47 @@ const MOCK_TRIVIA = {
 
 const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 6 };
 
-const FOOD_SYSTEM_PROMPT =
-  "You are the recipe developer and food-trivia writer for a health-conscious Instagram foodie page. You have a " +
-  "web_search tool. Before writing anything, search the web to find what's genuinely trending right now in healthy " +
-  "eating and food culture — do not rely on memory or produce something generic; the entire point of this account " +
-  "is to catch what's hot today for maximum engagement.\n\n" +
+// Shared across both arms below — the writing rules don't depend on whether
+// the pick came from a live search or the model's own knowledge.
+const FOOD_WRITING_RULES =
   "For a RECIPE post: keep it realistically healthy — whole-food ingredients, balanced macronutrients, no fad-diet " +
   "or medical claims ('cures', 'treats', 'detoxes'). Write the ingredient list and steps in your own words and your " +
   "own structure; do not copy another source's recipe text verbatim even when the idea came from a specific blogger " +
   "or publication. Steps must reflect real, food-safe technique (correct temperatures/times for meat, fish, eggs).\n\n" +
-  "For a TRIVIA post: base every claim on the sources you find — verify dates, numbers, and 'firsts' against what " +
-  "your search results actually say, and drop or soften anything not clearly supported. Prefer reputable sources " +
-  "(established food publications, registered-dietitian or nutrition-science sources, major news outlets, primary " +
-  "food-history references) over random blogs. Never invent statistics, quotes, or studies.\n\n" +
+  "For a TRIVIA post: base every claim on what you're confident is well established — verify dates, numbers, and " +
+  "'firsts' against what you're sure is true, and drop or soften anything not clearly supported. Never invent " +
+  "statistics, quotes, or studies.\n\n" +
   "Write for a food-curious, health-conscious audience: concrete, appetizing, no filler. Keep carousels short and " +
   "punchy rather than exhaustive — a tight 3-4 slide read outperforms a long one. Never use em dashes or double " +
   "hyphens (— or --) anywhere in the output; use periods, commas, colons, or parentheses instead.";
 
+const FOOD_SYSTEM_PROMPT_SEARCH =
+  "You are the recipe developer and food-trivia writer for a health-conscious Instagram foodie page. You have a " +
+  "web_search tool. Before writing anything, search the web to find what's genuinely trending right now in healthy " +
+  "eating and food culture — do not rely on memory or produce something generic; the entire point of this search is " +
+  "to catch what's hot today for maximum engagement. For a TRIVIA post, prefer reputable sources (established food " +
+  "publications, registered-dietitian or nutrition-science sources, major news outlets, primary food-history " +
+  "references) over random blogs.\n\n" + FOOD_WRITING_RULES;
+
+// Knowledge-only arm: no tool call, no per-request web_search fee, and no
+// extra search-result tokens. Healthy recipes and food trivia are mostly
+// evergreen (unlike bass_vault's recent_news pillar), so most runs don't need
+// same-day freshness — see config.foodSearchShare for the split.
+const FOOD_SYSTEM_PROMPT_KNOWLEDGE =
+  "You are the recipe developer and food-trivia writer for a health-conscious Instagram foodie page. Write from your " +
+  "own well-established knowledge of healthy eating and food culture: a reliably popular recipe style or a widely " +
+  "documented food fact, not something you need to verify against today's news. Do not claim to have searched the " +
+  "web or to be reporting something breaking right now — evergreen and well-loved beats unverified and 'trending'. " +
+  "If you're not confident a specific claim (a date, a number, a 'first') is well established, soften it or drop it " +
+  "rather than guessing.\n\n" + FOOD_WRITING_RULES;
+
 /**
  * Generate one food post — either a healthy recipe or a food-trivia fact —
- * via the Claude API, grounded in a live web search for what's currently
- * trending rather than a fixed topic seed list. Returns the validated
- * content object (shape of RECIPE_SCHEMA or TRIVIA_SCHEMA).
+ * via the Claude API, no fixed topic seed list. A config.foodSearchShare
+ * fraction of runs ground in a live web search for what's currently trending;
+ * the rest write from the model's own training knowledge (cheaper, and fine
+ * for content this evergreen — see FOOD_SYSTEM_PROMPT_KNOWLEDGE). Returns the
+ * validated content object (shape of RECIPE_SCHEMA or TRIVIA_SCHEMA).
  */
 export async function generateFoodContent() {
   if (config.mockMode) {
@@ -233,25 +255,32 @@ export async function generateFoodContent() {
 
   const schema = contentType === "recipe" ? RECIPE_SCHEMA : TRIVIA_SCHEMA;
 
+  const useSearch = Math.random() < config.foodSearchShare;
+  console.log(
+    `[generateFoodContent] routing to ${useSearch ? "Claude web_search" : "Claude knowledge-only"} (${contentType})`,
+  );
+
+  const postPrompt =
+    contentType === "recipe" ? "Produce one original, healthy recipe post." : "Produce one surprising, well-sourced food trivia post.";
+  const groundingPrompt = useSearch
+    ? "\n\nFirst, search the web for what's genuinely trending right now in healthy eating / food content " +
+      "(viral recipes, seasonal ingredients, food news, nutrition trends across food media and social platforms) " +
+      "— do not rely on memory for what's currently popular.\n\n"
+    : "\n\nDraw on your own well-established knowledge — no need to search, and no need for this to be tied to " +
+      "what's trending this particular week.\n\n";
+
   const response = await callClaude({
     account: config.accountLabel,
     operation: "generateFoodContent",
-    search: true,
+    search: useSearch,
     model: config.claudeModel,
     max_tokens: 16000,
-    tools: [WEB_SEARCH_TOOL],
-    system: FOOD_SYSTEM_PROMPT,
+    ...(useSearch ? { tools: [WEB_SEARCH_TOOL] } : {}),
+    system: useSearch ? FOOD_SYSTEM_PROMPT_SEARCH : FOOD_SYSTEM_PROMPT_KNOWLEDGE,
     messages: [
       {
         role: "user",
-        content:
-          (contentType === "recipe"
-            ? "Produce one original, healthy recipe post."
-            : "Produce one surprising, well-sourced food trivia post.") +
-          "\n\nFirst, search the web for what's genuinely trending right now in healthy eating / food content " +
-          "(viral recipes, seasonal ingredients, food news, nutrition trends across food media and social platforms) " +
-          "— do not rely on memory for what's currently popular.\n\n" +
-          `Already-posted — do NOT repeat or closely paraphrase any of these:\n${usedList}`,
+        content: postPrompt + groundingPrompt + `Already-posted — do NOT repeat or closely paraphrase any of these:\n${usedList}`,
       },
     ],
     output_config: {
