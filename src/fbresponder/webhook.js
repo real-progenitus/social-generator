@@ -7,6 +7,7 @@ import {
   findPendingNudge,
   FOLLOW_UP_TOPICS,
   getEvent,
+  hasNewerMessageFrom,
   isPaused,
   recentEventsFrom,
   updateEvent,
@@ -37,6 +38,18 @@ async function recordPausedIncoming({ eventType, platformEventId, fromId, fromNa
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// A DM is held this long before we generate a reply. If the sender fires off
+// more messages in the meantime (two quick bubbles, or a photo plus text),
+// they land as their own rows and only the last one actually replies — see
+// handleMessagingEvent — so a burst gets one combined answer and one Claude
+// call instead of one reply per message. Stacks before routeGeneratedReply's
+// own 2–9s typing delay. Env-overridable mainly so tests can shrink it.
+const COALESCE_WINDOW_MS = Number(process.env.FB_COALESCE_WINDOW_MS) || 10000;
+
+// Placeholder stored/shown for a photo-only DM (no caption) so the row, the
+// model context, and the Telegram notification all read sensibly.
+const IMAGE_ONLY_CONTENT = "[photo, no caption]";
 
 // The AI call itself only takes ~3s, and replies are often 100+ characters -
 // sent that fast, back to back, it reads as obviously automated rather than
@@ -192,14 +205,51 @@ async function handlePagePost(value, fromId) {
 }
 
 async function handleMessagingEvent(messaging) {
-  const text = messaging.message?.text;
-  const mid = messaging.message?.mid;
+  const msg = messaging.message;
+  const mid = msg?.mid;
   const senderId = messaging.sender?.id;
-  if (!text || !mid || messaging.message?.is_echo) return; // is_echo = our own sent message, re-delivered
-  if (eventExists(mid)) return;
+  if (!msg || !mid || msg.is_echo) return; // is_echo = our own sent message, re-delivered
+
+  const text = (msg.text ?? "").trim();
+  // Only real photos count as "they want to report something" — stickers, GIF
+  // reactions and thumbs-up/like taps (other attachment types) are noise and
+  // stay ignored, same as before.
+  const hasImage = (msg.attachments ?? []).some((a) => a.type === "image");
+  if (!text && !hasImage) return; // nothing actionable (empty, or sticker/like only)
+  if (eventExists(mid)) return; // already processed (Meta re-delivery)
+
+  const content = text || IMAGE_ONLY_CONTENT;
+  const imageOnly = !text && hasImage;
 
   if (isPaused(senderId)) {
-    return recordPausedIncoming({ eventType: "message", platformEventId: mid, fromId: senderId, content: text });
+    return recordPausedIncoming({ eventType: "message", platformEventId: mid, fromId: senderId, content });
+  }
+
+  // Record the message straight away — before the coalescing hold and the AI
+  // call. This (a) makes the mid dedup via the UNIQUE constraint even against
+  // a re-delivery that races us, so we never pay for a duplicate Claude call,
+  // and (b) makes this message visible to any sibling in the same burst so
+  // exactly one of them ends up replying.
+  const eventId = createEvent({
+    platform_event_id: mid,
+    event_type: "message",
+    from_id: senderId ?? null,
+    from_name: null,
+    content,
+    post_context: null,
+    proposed_reply: null,
+    topic: null,
+    status: "received",
+  });
+
+  // Hold briefly, then bow out if the sender has since said something newer —
+  // that later message is the one that answers the whole burst (this row stays
+  // as unanswered context for it). Only the latest message in a burst survives
+  // to the single generateReply call below.
+  await wait(COALESCE_WINDOW_MS);
+  if (hasNewerMessageFrom(senderId, eventId)) {
+    updateEvent(eventId, { status: "coalesced" });
+    return;
   }
 
   // If we're waiting on a reply to a check-in nudge from this sender, this
@@ -209,24 +259,24 @@ async function handleMessagingEvent(messaging) {
   // want to re-nudge on it).
   const pendingNudge = findPendingNudge(senderId);
 
-  const history = recentEventsFrom(senderId, "message");
-  const { reply: proposedReply, topic } = await generateReply({
-    eventType: "message",
-    content: text,
-    history,
-    followUpTopic: pendingNudge?.topic ?? null,
-  });
-
-  const eventId = createEvent({
-    platform_event_id: mid,
-    event_type: "message",
-    from_id: senderId ?? null,
-    from_name: null,
-    content: text,
-    post_context: null,
-    proposed_reply: proposedReply,
-    topic,
-  });
+  // Exclude this row from its own history; the earlier, still-unanswered burst
+  // messages remain so the single reply addresses everything they said.
+  const history = recentEventsFrom(senderId, "message", { excludeId: eventId });
+  let proposedReply;
+  let topic;
+  try {
+    ({ reply: proposedReply, topic } = await generateReply({
+      eventType: "message",
+      content,
+      history,
+      followUpTopic: pendingNudge?.topic ?? null,
+      imageOnly,
+    }));
+  } catch (err) {
+    updateEvent(eventId, { status: "failed" });
+    throw err;
+  }
+  updateEvent(eventId, { proposed_reply: proposedReply, topic });
 
   if (pendingNudge) updateEvent(pendingNudge.id, { followup_status: "replied" });
 

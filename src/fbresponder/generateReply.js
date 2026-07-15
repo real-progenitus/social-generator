@@ -80,6 +80,12 @@ const SYSTEM_PROMPT =
   "   c) Something else (how the app works, pricing, a general question, or just talking) - answer helpfully and " +
   "accurately using the product knowledge above, still in their language. Don't force the install pitch if it " +
   "doesn't fit, but mention it naturally if relevant.\n" +
+  "DEFAULT WHEN UNSURE: if the first message is just a greeting (\"Olá\", \"Hola\", \"Hi\", \"Boa noite\") or is " +
+  "short/vague with no clear question, do NOT reply with only a clarifying question like \"did you lose or find " +
+  "something?\" or \"how can I help?\". People message this Page almost entirely to report a lost or found item, " +
+  "so treat a bare or vague opener as case (a): give the João greeting and lead straight into the download link " +
+  "and the steps. Reserve (b)/(c) for messages that are clearly a business inquiry or a specific non-reporting " +
+  "question - never leave a first message answered with a question of your own when you could have given the link.\n" +
   "3. If prior turns are shown below, this is a continuation - respond like you remember the conversation, don't " +
   "re-introduce yourself or repeat information you already gave.\n\n" +
   "HARD RULES, never break these:\n" +
@@ -91,7 +97,8 @@ const SYSTEM_PROMPT =
   "- Don't make legal, medical, or safety claims.\n" +
   "- On a first-contact message where someone is reporting a lost/found item, the reply must include the " +
   "download link (https://ifound.tech or the /pt variant) - never reply with only reassurance, product " +
-  "explanation, or clarifying questions and save the link for a later turn.\n" +
+  "explanation, or clarifying questions and save the link for a later turn. A bare greeting or a vague opener " +
+  "with no clear question counts as first-contact reporting here - give the link, don't ask what they need.\n" +
   "- Keep replies VERY SHORT - this is a chat DM, not an email, and every message we send costs money to " +
   "generate, so brevity matters on its own merits too. Default to one short sentence, ideally well under 100 " +
   "characters; two short sentences at most, only when something genuinely needs it (like the multi-step " +
@@ -106,9 +113,10 @@ const SYSTEM_PROMPT =
   "end with a question of your own if there's one specific piece of information you genuinely need from them to " +
   "help further.\n\n" +
   "You must also classify the reply's topic: \"photo_help\" if it answers a question about adding/uploading " +
-  "a photo to a report, or a complaint that they can't add one; \"post_redirect\" if this reply includes the " +
-  "ifound download link (https://ifound.tech or the /pt variant) because the sender is reporting, or trying " +
-  "to report, a lost/found item; otherwise \"other\".";
+  "a photo to a report, or a complaint that they can't add one; \"post_redirect\" WHENEVER your reply contains " +
+  "the ifound download link (https://ifound.tech or the /pt variant) - this includes greeting-only openers and " +
+  "photo-only messages you redirected, regardless of how the sender phrased things; otherwise \"other\". Getting " +
+  "this right matters: \"post_redirect\" is what schedules the later \"did you manage to post it?\" check-in.";
 
 const REPLY_SCHEMA = {
   type: "object",
@@ -133,6 +141,22 @@ const MOCK_REPLY = {
     "when) so we can help connect this with the right person?",
   topic: "other",
 };
+
+// Topics that earn a proactive follow-up nudge (see db.js FOLLOW_UP_TOPICS).
+// Any other classification the model returns collapses to "other".
+const FOLLOW_UP_ELIGIBLE = new Set(["photo_help", "post_redirect"]);
+
+// Appended when the incoming message is a photo with no caption (see
+// webhook.js). A picture can't be language-detected and usually means "I want
+// to report this" — but the sender may also have sent text in the same burst,
+// which arrives as the conversation history above, so fold that in rather than
+// ignoring it.
+const IMAGE_ONLY_NOTE =
+  "\n\nNOTE: this latest message is a photo the sender sent with no caption. Treat it as them wanting to " +
+  "report a lost or found item. If they wrote any text earlier in the conversation above, answer THAT and " +
+  "treat the photo as extra context; if there is no text from them anywhere, just give the standard " +
+  "download-and-post redirect (greeting + link + steps). You cannot detect language from an image, so reply " +
+  "in the language of the earlier turns if there are any, otherwise fall back to European Portuguese.";
 
 // Notes appended when this message is closing the loop on a proactive
 // follow-up nudge (see followup.js) - keyed by the topic of the nudge that
@@ -168,6 +192,7 @@ export async function generateReply({
   fromName,
   history,
   followUpTopic = null,
+  imageOnly = false,
 }) {
   if (config.mockMode) {
     console.log("[fbresponder/generateReply] MOCK_MODE — returning canned reply");
@@ -184,6 +209,7 @@ export async function generateReply({
     ]
       .filter(Boolean)
       .join("\n") +
+    (imageOnly ? IMAGE_ONLY_NOTE : "") +
     (followUpTopic ? (FOLLOW_UP_NOTES[followUpTopic] ?? "") : "");
 
   const response = await callClaude({
@@ -206,6 +232,9 @@ export async function generateReply({
   const parsed = JSON.parse(text);
   return {
     reply: (parsed.reply ?? "").trim(),
-    topic: parsed.topic === "photo_help" ? "photo_help" : "other",
+    // Preserve whichever follow-up-eligible topic the model chose — collapsing
+    // post_redirect down to "other" here is what silently killed the
+    // "did you manage to post it?" nudge (only photo_help survived before).
+    topic: FOLLOW_UP_ELIGIBLE.has(parsed.topic) ? parsed.topic : "other",
   };
 }

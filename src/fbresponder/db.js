@@ -120,20 +120,36 @@ export function getEvent(id) {
 // Recent turns with this sender, oldest first, for multi-turn context. Only
 // surfaces proposed_reply for rows the sender actually saw (status='sent') —
 // a rejected or still-pending proposal was never delivered, so presenting it
-// as something "we already said" would mislead the model.
-export function recentEventsFrom(fromId, eventType, limit = 6) {
+// as something "we already said" would mislead the model. `excludeId` drops
+// one row (the message currently being answered, which is recorded before we
+// generate — see webhook.js's coalescing) so it isn't fed back as its own
+// history; the still-unanswered earlier burst messages remain as context.
+export function recentEventsFrom(fromId, eventType, { limit = 6, excludeId = null } = {}) {
   if (!fromId) return [];
   const rows = db
     .prepare(
       `SELECT content, proposed_reply, status FROM fb_events
-       WHERE from_id = ? AND event_type = ?
+       WHERE from_id = ? AND event_type = ? AND (? IS NULL OR id != ?)
        ORDER BY id DESC LIMIT ?`,
     )
-    .all(fromId, eventType, limit);
+    .all(fromId, eventType, excludeId, excludeId, limit);
   return rows.reverse().map((r) => ({
     content: r.content,
     reply: r.status === "sent" ? r.proposed_reply : null,
   }));
+}
+
+// True if this sender has any message row newer than `afterId` — used by the
+// DM coalescing debounce (webhook.js) to let the latest message in a burst be
+// the one that actually replies, while earlier ones bow out. Same monotonic-id
+// "is there anything newer from them" test as findDueFollowUps's NOT EXISTS.
+export function hasNewerMessageFrom(fromId, afterId) {
+  if (!fromId) return false;
+  return !!db
+    .prepare(
+      `SELECT 1 FROM fb_events WHERE from_id = ? AND event_type = 'message' AND id > ?`,
+    )
+    .get(fromId, afterId);
 }
 
 // A prior 'photo_help'/'post_redirect' DM we sent a check-in nudge for, and
