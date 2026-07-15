@@ -36,7 +36,7 @@ const NUDGE_LABELS = {
   post_redirect: "post-redirect",
 };
 
-async function craftNudgeText(originalContent, topic) {
+async function craftNudgeText(priorReply, topic) {
   if (config.mockMode) return MOCK_NUDGES[topic] ?? MOCK_NUDGES.photo_help;
 
   const response = await callClaude({
@@ -46,14 +46,20 @@ async function craftNudgeText(originalContent, topic) {
     max_tokens: 100,
     thinking: { type: "disabled" },
     system: NUDGE_INSTRUCTIONS[topic] ?? NUDGE_INSTRUCTIONS.photo_help,
-    messages: [{ role: "user", content: originalContent }],
+    messages: [{ role: "user", content: priorReply }],
   });
   const text = response.content.find((b) => b.type === "text")?.text ?? "";
   return text.trim();
 }
 
 async function sendFollowUp(event) {
-  const text = await craftNudgeText(event.content, event.topic);
+  // Detect language from our own already-sent reply, not the original DM
+  // content - for image-only DMs, event.content is the hardcoded English
+  // placeholder "[photo, no caption]" (see IMAGE_ONLY_CONTENT in
+  // webhook.js), which carries no real language signal and previously made
+  // the nudge default to English even when the initial reply correctly went
+  // out in another language via the locale fallback.
+  const text = await craftNudgeText(event.proposed_reply, event.topic);
   await sendMessengerMessage(event.from_id, text);
   updateEvent(event.id, { followup_status: "nudge_sent" });
   await tg("sendMessage", {
