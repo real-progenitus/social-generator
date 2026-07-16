@@ -80,6 +80,23 @@ export async function notifyFbSent(event) {
   });
 }
 
+// Only used when FB_AUTO_REPLY=true — the send itself threw (expired token,
+// missing permission, rate limit, etc.). Unlike notifyFbSent's after-the-fact
+// visibility, this is the only signal anyone gets that a real person's
+// comment/DM went unanswered — routeGeneratedReply's DB status flip alone is
+// silent unless someone happens to check fb_events. Carries the same
+// "take over" button as notifyFbSent so a human can pick up the thread.
+export async function notifyFbSendFailed(event, err) {
+  await tg("sendMessage", {
+    chat_id: config.telegramChatId,
+    text:
+      `⚠️ Auto-reply FAILED to send for ${label(event.event_type).toLowerCase()} from ${event.from_name || "someone"} (#${event.id}):\n${err.message}\n\n` +
+      `Them: ${event.content}\n\n` +
+      `Proposed reply (not sent):\n${event.proposed_reply}`,
+    reply_markup: event.from_id ? takeoverKeyboard(event.from_id, false) : undefined,
+  });
+}
+
 // Toggles pause/resume for a sender and flips the button in place on the
 // same Telegram message, so there's no separate "list" to manage — whichever
 // notification you're looking at is always up to date.

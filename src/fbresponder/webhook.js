@@ -22,7 +22,7 @@ import {
   sendMessengerMessage,
   sendTypingOn,
 } from "./graph.js";
-import { notifyFbSent, notifyPausedIncoming, sendForFbApproval } from "./review.js";
+import { notifyFbSendFailed, notifyFbSent, notifyPausedIncoming, sendForFbApproval } from "./review.js";
 
 // A sender currently under human takeover gets no AI call at all (that's the
 // whole point — stop paying for and sending bot replies to them) and no
@@ -99,6 +99,11 @@ async function routeGeneratedReply(event) {
     } catch (err) {
       updateEvent(event.id, { status: "failed" });
       console.error(`[fbresponder/webhook] auto-reply failed for #${event.id}:`, err);
+      try {
+        await notifyFbSendFailed({ ...event, status: "failed" }, err);
+      } catch (notifyErr) {
+        console.error(`[fbresponder/webhook] failed to notify about #${event.id} failure:`, notifyErr);
+      }
     }
   } else {
     await sendForFbApproval(event);
