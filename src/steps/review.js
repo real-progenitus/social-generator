@@ -117,10 +117,13 @@ async function handleCallback(cb) {
   if (!post) return reply(`Post #${postId} not found.`);
 
   // status is set to 'approved' before publishPost() runs, so a crash/restart
-  // mid-publish leaves it stuck here forever with no other recovery path —
-  // treat a re-approve as "retry the stuck publish" rather than ignoring it.
-  if (action === "approve" && post.status === "approved") {
-    await reply(`⏳ Post #${postId} was already approved but never published — retrying…`);
+  // mid-publish leaves it stuck here forever with no other recovery path.
+  // A normal publish failure (e.g. a permissions/token error) lands in
+  // 'failed' with the same problem — treat a re-approve as "retry the
+  // publish" for both rather than ignoring it.
+  if (action === "approve" && (post.status === "approved" || post.status === "failed")) {
+    await reply(`⏳ Post #${postId} is '${post.status}' — retrying publish…`);
+    if (post.status === "failed") updatePost(postId, { status: "approved" });
     return doPublish(postId);
   }
 
