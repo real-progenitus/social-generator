@@ -18,7 +18,7 @@ export const config = {
   // deepseek-reasoner aliases deprecate 2026-07-24 in favor of
   // deepseek-v4-flash — after that, set DEEPSEEK_MODEL=deepseek-v4-flash.
   deepseekApiKey: process.env.DEEPSEEK_API_KEY ?? "",
-  deepseekModel: process.env.DEEPSEEK_MODEL ?? "deepseek-chat",
+  deepseekModel: process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash",
   deepseekShare: Number(process.env.DEEPSEEK_SHARE ?? 0.5),
 
   // Tavily search (https://api.tavily.com) — grounds the recent_news pillar,
