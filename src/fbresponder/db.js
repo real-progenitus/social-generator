@@ -12,6 +12,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS fb_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     platform_event_id TEXT NOT NULL UNIQUE,
+    -- 'comment' | 'message' | 'mention'
     event_type TEXT NOT NULL,
     -- pending_review -> approved -> sent | failed
     -- pending_review -> rejected
@@ -40,6 +41,11 @@ db.exec(`
 for (const [column, type] of [
   ["topic", "TEXT"],
   ["followup_status", "TEXT"],
+  // Which configured Page (see pages.js) this event belongs to — needed so
+  // review.js/followup.js can re-resolve the right access token long after
+  // the original webhook request. NULL on rows created before this column
+  // existed; those are treated as the 'default' (main) Page.
+  ["page_key", "TEXT"],
 ]) {
   const exists = db
     .prepare("SELECT 1 FROM pragma_table_info('fb_events') WHERE name = ?")
@@ -128,10 +134,10 @@ export function createEvent(fields) {
   const info = db
     .prepare(
       `INSERT INTO fb_events
-         (platform_event_id, event_type, from_id, from_name, content, post_context, proposed_reply, topic, status)
-       VALUES (@platform_event_id, @event_type, @from_id, @from_name, @content, @post_context, @proposed_reply, @topic, @status)`,
+         (platform_event_id, event_type, from_id, from_name, content, post_context, proposed_reply, topic, status, page_key)
+       VALUES (@platform_event_id, @event_type, @from_id, @from_name, @content, @post_context, @proposed_reply, @topic, @status, @page_key)`,
     )
-    .run({ status: "pending_review", topic: null, ...fields });
+    .run({ status: "pending_review", topic: null, page_key: null, ...fields });
   return info.lastInsertRowid;
 }
 

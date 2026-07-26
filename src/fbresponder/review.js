@@ -2,9 +2,21 @@ import { config } from "../config.js";
 import { tg } from "../lib/telegram.js";
 import { getEvent, isPaused, pauseSender, resumeSender, updateEvent } from "./db.js";
 import { replyToComment, sendMessengerMessage } from "./graph.js";
+import { getPageByKey } from "./pages.js";
 
 function label(eventType) {
-  return eventType === "comment" ? "💬 Comment" : "✉️ Message";
+  if (eventType === "message") return "✉️ Message";
+  if (eventType === "mention") return "🔔 Mention";
+  return "💬 Comment";
+}
+
+// Telegram approvals/notifications fire well after the original webhook
+// request (possibly after a process restart), so they can't rely on a
+// closure over the page that handled the request — re-resolve it from the
+// event's stored page_key instead. NULL page_key (rows from before this
+// column existed) falls back to the main/default Page.
+function resolvePage(event) {
+  return getPageByKey(event.page_key) ?? getPageByKey("default");
 }
 
 // Same button in both states, toggled in place by editing the message's
@@ -28,20 +40,23 @@ function takeoverKeyboard(fromId, paused) {
 // bot right there.
 export async function notifyPausedIncoming(event) {
   if (!event.from_id) return; // no sender id to resume on later, nothing to attach the button to
+  const page = resolvePage(event);
   await tg("sendMessage", {
     chat_id: config.telegramChatId,
     text:
-      `🙋 ${label(event.event_type)} from ${event.from_name || "someone"} (#${event.id}) — you're handling this one:\n\n` +
+      `${page.label} ${label(event.event_type)} from ${event.from_name || "someone"} (#${event.id}) — you're handling this one:\n\n` +
       event.content,
     reply_markup: takeoverKeyboard(event.from_id, true),
   });
 }
 
 async function deliver(event) {
-  if (event.event_type === "comment") {
-    return replyToComment(event.platform_event_id, event.proposed_reply);
+  const page = resolvePage(event);
+  if (event.event_type === "message") {
+    return sendMessengerMessage(event.from_id, event.proposed_reply, page.token);
   }
-  return sendMessengerMessage(event.from_id, event.proposed_reply);
+  // "comment" and "mention" both reply as a comment on the relevant object.
+  return replyToComment(event.platform_event_id, event.proposed_reply, page.token);
 }
 
 /**
@@ -50,10 +65,11 @@ async function deliver(event) {
  * loop (same process) processes the decision.
  */
 export async function sendForFbApproval(event) {
+  const page = resolvePage(event);
   await tg("sendMessage", {
     chat_id: config.telegramChatId,
     text:
-      `${label(event.event_type)} from ${event.from_name || "someone"} (#${event.id})\n\n` +
+      `${page.label} ${label(event.event_type)} from ${event.from_name || "someone"} (#${event.id})\n\n` +
       (event.post_context ? `On post: "${event.post_context}"\n\n` : "") +
       `Them: ${event.content}\n\n` +
       `Proposed reply:\n${event.proposed_reply}`,
@@ -73,9 +89,10 @@ export async function sendForFbApproval(event) {
 // Carries the "take over" button so a bad reply can be caught mid-conversation
 // and handed to a human for the rest of that thread.
 export async function notifyFbSent(event) {
+  const page = resolvePage(event);
   await tg("sendMessage", {
     chat_id: config.telegramChatId,
-    text: `🚀 Auto-replied to ${label(event.event_type).toLowerCase()} from ${event.from_name || "someone"} (#${event.id}):\n${event.proposed_reply}`,
+    text: `🚀 ${page.label} Auto-replied to ${label(event.event_type).toLowerCase()} from ${event.from_name || "someone"} (#${event.id}):\n${event.proposed_reply}`,
     reply_markup: event.from_id ? takeoverKeyboard(event.from_id, false) : undefined,
   });
 }
@@ -87,10 +104,11 @@ export async function notifyFbSent(event) {
 // silent unless someone happens to check fb_events. Carries the same
 // "take over" button as notifyFbSent so a human can pick up the thread.
 export async function notifyFbSendFailed(event, err) {
+  const page = resolvePage(event);
   await tg("sendMessage", {
     chat_id: config.telegramChatId,
     text:
-      `⚠️ Auto-reply FAILED to send for ${label(event.event_type).toLowerCase()} from ${event.from_name || "someone"} (#${event.id}):\n${err.message}\n\n` +
+      `⚠️ ${page.label} Auto-reply FAILED to send for ${label(event.event_type).toLowerCase()} from ${event.from_name || "someone"} (#${event.id}):\n${err.message}\n\n` +
       `Them: ${event.content}\n\n` +
       `Proposed reply (not sent):\n${event.proposed_reply}`,
     reply_markup: event.from_id ? takeoverKeyboard(event.from_id, false) : undefined,

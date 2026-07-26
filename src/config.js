@@ -105,6 +105,10 @@ export const config = {
   // ownership claims on specific lost/found items).
   fbAutoReplyMessages: bool(process.env.FB_AUTO_REPLY_MESSAGES, false),
   fbAutoReplyComments: bool(process.env.FB_AUTO_REPLY_COMMENTS, false),
+  // Mentions reply with a fixed template (no Claude call), so this defaults
+  // on unlike the two flags above — there's no per-reply generation risk to
+  // gate behind manual review first.
+  fbAutoReplyMentions: bool(process.env.FB_AUTO_REPLY_MENTIONS, true),
   fbWebhookPort: Number(process.env.FB_WEBHOOK_PORT ?? 8791),
 };
 

@@ -1,7 +1,13 @@
 import { config } from "../config.js";
 import { callClaude } from "../lib/claudeClient.js";
+import { callDeepSeek } from "../lib/deepseekClient.js";
 
-const SYSTEM_PROMPT =
+// Both interpolated below: `${fallbackLanguage}` (STEP 0's tie-breaker
+// default, was hardcoded "Portuguese" back when there was only one Page) and
+// `${ptDialectNote}` (European vs Brazilian Portuguese specifics — see
+// ptDialectBlock further down).
+function buildSystemPrompt(fallbackLanguage, ptDialectNote) {
+  return (
   "You reply to comments and Messenger DMs on the ifound Facebook Page, on ifound's behalf.\n\n" +
   "STEP 0 - LANGUAGE DETECTION (do this first, before anything else below): identify the sender's language " +
   "from decisive markers, not vocabulary that overlaps between languages. This prompt discusses Portuguese " +
@@ -13,7 +19,7 @@ const SYSTEM_PROMPT =
   "\"não\", \"ajuda\" (not \"ayuda\"), \"você\", \"tá\", or any nasal tilde spelling (ã, õ, ão - não, mãe, " +
   "informação). If the message has zero decisive markers either way (e.g. a single ambiguous word like " +
   "\"como\" with no accent, or \"gato\"), fall back to overall spelling patterns, and if still unsure, " +
-  "Portuguese is the safer default for this Page - but always prefer a decisive marker over that default. " +
+  `${fallbackLanguage} is the safer default for this Page - but always prefer a decisive marker over that default. ` +
   "Decisive markers count wherever they appear in the message, including inside proper nouns, place names, " +
   "brand names, or addresses - a marker is a spelling fact about the text, not a judgment about whether the " +
   "surrounding word is \"real\" vocabulary. For example, a message that is nothing but place names, like " +
@@ -66,12 +72,7 @@ const SYSTEM_PROMPT =
   "post through the app to reach more people. Then point them to download ifound and post it themselves (this is " +
   "case (a) - use the download link and the post_redirect topic). Never agree to post it, never say you'll " +
   "forward it to someone who will, and never claim we already posted anything for them.\n\n" +
-  "LANGUAGE NOTE: this is European Portuguese, not Brazilian. When replying in Portuguese: ifound is " +
-  "grammatically feminine - say \"a ifound\", never \"o ifound\". Greet with \"Olá\", never \"Oi\" (Brazilian). " +
-  "Clitic pronouns (te, o, a, lhe, nos, vos, os, as) attached to an infinitive verb ALWAYS take a hyphen: " +
-  "\"ajudar-te\", \"contactar-nos\", \"dizer-lhe\" - never fuse them without the hyphen (never \"ajudarte\", " +
-  "\"contactarnos\", \"dizerlhe\"). This applies to every infinitive + pronoun pairing, including after " +
-  "\"vou\", \"posso\", \"para\", \"quero\".\n\n" +
+  ptDialectNote +
   "DISTINGUISHING SPANISH FROM PORTUGUESE: they share vocabulary, so short informal messages are easy to " +
   "misdetect - don't guess from a single overlapping word. Portuguese markers: nasal vowels spelled with a " +
   "tilde (ã, õ, ão - não, mãe, informação), \"você\"/\"tu\", \"obrigado/a\", \"tá\"/\"está\". Spanish markers: " +
@@ -142,7 +143,50 @@ const SYSTEM_PROMPT =
   "a photo to a report, or a complaint that they can't add one; \"post_redirect\" WHENEVER your reply contains " +
   "the ifound download link (https://ifound.tech or the /pt variant) - this includes greeting-only openers and " +
   "photo-only messages you redirected, regardless of how the sender phrased things; otherwise \"other\". Getting " +
-  "this right matters: \"post_redirect\" is what schedules the later \"did you manage to post it?\" check-in.";
+  "this right matters: \"post_redirect\" is what schedules the later \"did you manage to post it?\" check-in."
+  );
+}
+
+// European is the default for every Page except the Brazil Page — this also
+// covers e.g. a Spain-Page sender unexpectedly writing in Portuguese, which
+// should still follow the (more thoroughly verified) European conventions.
+// The Brazilian block deliberately does NOT assert the gender-article rule
+// ("a ifound" vs "o ifound") the European block does - that's a genuine open
+// question in Brazilian usage for a foreign brand name, not a settled rule
+// worth guessing at. Draft, not native-speaker-verified — see plan risks.
+function ptDialectBlock(dialect) {
+  if (dialect === "brazilian") {
+    return (
+      "LANGUAGE NOTE: this is Brazilian Portuguese, not European. When replying in Portuguese: greet with " +
+      "\"Oi\" or \"Olá\", both read naturally here (unlike European Portuguese, where only \"Olá\" is " +
+      "natural). Clitic pronoun placement is more flexible in Brazilian Portuguese - prefer placing the " +
+      "pronoun before the verb in everyday speech (e.g. \"posso te ajudar\" rather than the European " +
+      "\"posso ajudar-te\"); don't force the European mandatory-hyphenated-enclisis rule onto Brazilian " +
+      "replies.\n\n"
+    );
+  }
+  return (
+    "LANGUAGE NOTE: this is European Portuguese, not Brazilian. When replying in Portuguese: ifound is " +
+    "grammatically feminine - say \"a ifound\", never \"o ifound\". Greet with \"Olá\", never \"Oi\" (Brazilian). " +
+    "Clitic pronouns (te, o, a, lhe, nos, vos, os, as) attached to an infinitive verb ALWAYS take a hyphen: " +
+    "\"ajudar-te\", \"contactar-nos\", \"dizer-lhe\" - never fuse them without the hyphen (never \"ajudarte\", " +
+    "\"contactarnos\", \"dizerlhe\"). This applies to every infinitive + pronoun pairing, including after " +
+    "\"vou\", \"posso\", \"para\", \"quero\".\n\n"
+  );
+}
+
+// One cache entry per distinct (language, ptDialect) pair actually seen —
+// 6 variants across the current 13 Pages — each still individually cached
+// Anthropic-side via cache_control below, just as N cache entries instead of
+// the single global one this had back when there was only one Page.
+const systemPromptCache = new Map();
+function systemPromptFor(page) {
+  const cacheKey = `${page.language}|${page.ptDialect}`;
+  if (!systemPromptCache.has(cacheKey)) {
+    systemPromptCache.set(cacheKey, buildSystemPrompt(page.language, ptDialectBlock(page.ptDialect)));
+  }
+  return systemPromptCache.get(cacheKey);
+}
 
 const REPLY_SCHEMA = {
   type: "object",
@@ -172,6 +216,17 @@ const REPLY_SCHEMA = {
   additionalProperties: false,
 };
 
+// DeepSeek's json_object mode has no schema enforcement (mirrors REPLY_SCHEMA
+// above, which Claude's structured output enforces directly) — see
+// generateFact.js's JSON_SHAPE_INSTRUCTION for the same pattern elsewhere in
+// this repo. The word "json" must appear for response_format to take effect.
+const DEEPSEEK_JSON_SHAPE_INSTRUCTION =
+  "\n\nRespond with a single valid json object and nothing else (no markdown, no code fences), with exactly " +
+  "these keys: detected_language (the sender's language for THIS message only, per STEP 0 above, as a short " +
+  "language name e.g. \"Portuguese\", \"Spanish\", \"English\" — decide this before writing the reply); " +
+  "reply (the reply text to send, following all rules above); topic (exactly one of \"photo_help\", " +
+  "\"post_redirect\", or \"other\", per the classification rule above).";
+
 const MOCK_REPLY = {
   reply:
     "Thanks for reaching out! Could you share a bit more detail (color, where it was lost or found, and roughly " +
@@ -188,12 +243,19 @@ const FOLLOW_UP_ELIGIBLE = new Set(["photo_help", "post_redirect"]);
 // to report this" — but the sender may also have sent text in the same burst,
 // which arrives as the conversation history above, so fold that in rather than
 // ignoring it.
-const IMAGE_ONLY_NOTE =
-  "\n\nNOTE: this latest message is a photo the sender sent with no caption. Treat it as them wanting to " +
-  "report a lost or found item. If they wrote any text earlier in the conversation above, answer THAT and " +
-  "treat the photo as extra context; if there is no text from them anywhere, just give the standard " +
-  "download-and-post redirect (greeting + link + steps). You cannot detect language from an image, so reply " +
-  "in the language of the earlier turns if there are any, otherwise fall back to European Portuguese.";
+function imageOnlyNote(page) {
+  const fallback =
+    page.language === "Portuguese"
+      ? `${page.ptDialect === "brazilian" ? "Brazilian" : "European"} Portuguese`
+      : page.language;
+  return (
+    "\n\nNOTE: this latest message is a photo the sender sent with no caption. Treat it as them wanting to " +
+    "report a lost or found item. If they wrote any text earlier in the conversation above, answer THAT and " +
+    "treat the photo as extra context; if there is no text from them anywhere, just give the standard " +
+    "download-and-post redirect (greeting + link + steps). You cannot detect language from an image, so reply " +
+    `in the language of the earlier turns if there are any, otherwise fall back to ${fallback}.`
+  );
+}
 
 // Maps a Messenger account locale prefix to a language name for the
 // image-only hint below. Generalized beyond just PT/ES since a sender's
@@ -208,10 +270,10 @@ const LOCALE_LANGUAGE_MAP = {
   de: "German",
 };
 
-// Only meaningful for image-only messages (see IMAGE_ONLY_NOTE) — a real
-// account-locale signal beats blindly guessing Portuguese when there's no
-// text and possibly no history either. Additive: if locale is unavailable or
-// unrecognized, IMAGE_ONLY_NOTE's own existing fallback chain is untouched.
+// Only meaningful for image-only messages (see imageOnlyNote) — a real
+// account-locale signal beats blindly guessing when there's no text and
+// possibly no history either. Additive: if locale is unavailable or
+// unrecognized, imageOnlyNote's own existing fallback chain is untouched.
 function accountLocaleHint(accountLocale) {
   if (!accountLocale) return "";
   const language = LOCALE_LANGUAGE_MAP[accountLocale.split(/[_-]/)[0].toLowerCase()];
@@ -319,6 +381,69 @@ function renderHistory(history) {
   return `Conversation so far:\n${lines.join("\n")}\n\n`;
 }
 
+function parseReplyJson(text) {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  return JSON.parse(cleaned);
+}
+
+function finalizeParsed(parsed) {
+  console.log(`[fbresponder/generateReply] detected_language: ${parsed.detected_language ?? "(none)"}`);
+  return {
+    reply: (parsed.reply ?? "").trim(),
+    // Preserve whichever follow-up-eligible topic the model chose — collapsing
+    // post_redirect down to "other" here is what silently killed the
+    // "did you manage to post it?" nudge (only photo_help survived before).
+    topic: FOLLOW_UP_ELIGIBLE.has(parsed.topic) ? parsed.topic : "other",
+  };
+}
+
+// DeepSeek is the primary path (cheap, and doesn't share Anthropic's billing
+// pool — see the 2026-07-24 credit-balance outage this was added to route
+// around), with Claude kept as the fallback on any error, same resilience
+// shape as generateFact.js's withClaudeFallback.
+async function generateReplyViaDeepSeek(page, contextLines) {
+  const text = await callDeepSeek({
+    account: "ifound",
+    operation: "fbReply",
+    model: config.deepseekModel,
+    jsonMode: true,
+    // Well above Claude's 400 (which has thinking disabled) — deepseek-v4-flash
+    // is a reasoning model that spends part of this budget on hidden
+    // reasoning_content before it ever writes the visible reply. Reasoning
+    // length is unpredictable and does NOT correlate with input length —
+    // short, ambiguous inputs (exactly the hard language-detection cases this
+    // prompt cares most about) can trigger MORE reasoning than long clear
+    // ones, and too tight a budget truncates the JSON mid-string rather than
+    // just shortening the reply (confirmed while wiring this up).
+    maxTokens: 3000,
+    system: systemPromptFor(page) + DEEPSEEK_JSON_SHAPE_INSTRUCTION,
+    user: contextLines,
+  });
+  return finalizeParsed(parseReplyJson(text));
+}
+
+async function generateReplyViaClaude(page, contextLines) {
+  const response = await callClaude({
+    account: "ifound",
+    operation: "fbReply",
+    model: config.claudeModel,
+    max_tokens: 400,
+    // Classification + short templated reply, not a reasoning task — skip
+    // thinking so the 400-token budget goes entirely to the reply instead of
+    // competing with adaptive thinking (on by default for claude-sonnet-5).
+    thinking: { type: "disabled" },
+    // One of a handful of page-specific variants (see systemPromptFor) — each
+    // reused across every call for that page's language/dialect, cached
+    // instead of paying full input price each time.
+    system: [{ type: "text", text: systemPromptFor(page), cache_control: { type: "ephemeral" } }],
+    messages: [{ role: "user", content: contextLines }],
+    output_config: { format: { type: "json_schema", schema: REPLY_SCHEMA } },
+  });
+
+  const text = response.content.find((b) => b.type === "text")?.text ?? "{}";
+  return finalizeParsed(JSON.parse(text));
+}
+
 export async function generateReply({
   eventType,
   content,
@@ -328,6 +453,7 @@ export async function generateReply({
   followUpTopic = null,
   imageOnly = false,
   accountLocale = null,
+  page,
 }) {
   if (config.mockMode) {
     console.log("[fbresponder/generateReply] MOCK_MODE — returning canned reply");
@@ -345,33 +471,13 @@ export async function generateReply({
       .filter(Boolean)
       .join("\n") +
     (imageOnly ? "" : detectLanguageHint(content)) +
-    (imageOnly ? IMAGE_ONLY_NOTE + accountLocaleHint(accountLocale) : "") +
+    (imageOnly ? imageOnlyNote(page) + accountLocaleHint(accountLocale) : "") +
     (followUpTopic ? (FOLLOW_UP_NOTES[followUpTopic] ?? "") : "");
 
-  const response = await callClaude({
-    account: "ifound",
-    operation: "fbReply",
-    model: config.claudeModel,
-    max_tokens: 400,
-    // Classification + short templated reply, not a reasoning task — skip
-    // thinking so the 400-token budget goes entirely to the reply instead of
-    // competing with adaptive thinking (on by default for claude-sonnet-5).
-    thinking: { type: "disabled" },
-    // SYSTEM_PROMPT is static and reused on every comment/DM webhook call —
-    // cache it instead of paying full input price each time.
-    system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
-    messages: [{ role: "user", content: contextLines }],
-    output_config: { format: { type: "json_schema", schema: REPLY_SCHEMA } },
-  });
-
-  const text = response.content.find((b) => b.type === "text")?.text ?? "{}";
-  const parsed = JSON.parse(text);
-  console.log(`[fbresponder/generateReply] detected_language: ${parsed.detected_language ?? "(none)"}`);
-  return {
-    reply: (parsed.reply ?? "").trim(),
-    // Preserve whichever follow-up-eligible topic the model chose — collapsing
-    // post_redirect down to "other" here is what silently killed the
-    // "did you manage to post it?" nudge (only photo_help survived before).
-    topic: FOLLOW_UP_ELIGIBLE.has(parsed.topic) ? parsed.topic : "other",
-  };
+  try {
+    return await generateReplyViaDeepSeek(page, contextLines);
+  } catch (err) {
+    console.warn(`[fbresponder/generateReply] DeepSeek failed (${err.message}); falling back to Claude`);
+    return generateReplyViaClaude(page, contextLines);
+  }
 }

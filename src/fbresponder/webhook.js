@@ -22,13 +22,15 @@ import {
   sendMessengerMessage,
   sendTypingOn,
 } from "./graph.js";
+import { getMentionReplyText } from "./mentionTemplates.js";
+import { getPageByFbId } from "./pages.js";
 import { notifyFbSendFailed, notifyFbSent, notifyPausedIncoming, sendForFbApproval } from "./review.js";
 
 // A sender currently under human takeover gets no AI call at all (that's the
 // whole point — stop paying for and sending bot replies to them) and no
 // follow-up-nudge tracking. The message is just logged and passed through to
 // Telegram so the "resume" button is right there when the human's done.
-async function recordPausedIncoming({ eventType, platformEventId, fromId, fromName, content, postContext }) {
+async function recordPausedIncoming({ eventType, platformEventId, fromId, fromName, content, postContext, page }) {
   const eventId = createEvent({
     platform_event_id: platformEventId,
     event_type: eventType,
@@ -39,6 +41,7 @@ async function recordPausedIncoming({ eventType, platformEventId, fromId, fromNa
     proposed_reply: null,
     topic: null,
     status: "human_takeover",
+    page_key: page.key,
   });
   await notifyPausedIncoming(getEvent(eventId));
 }
@@ -81,18 +84,25 @@ function verifySignature(rawBody, signatureHeader) {
   return expectedBuf.length === givenBuf.length && crypto.timingSafeEqual(expectedBuf, givenBuf);
 }
 
-async function routeGeneratedReply(event) {
+async function routeGeneratedReply(event, page) {
   const autoReply =
-    event.event_type === "message" ? config.fbAutoReplyMessages : config.fbAutoReplyComments;
+    event.event_type === "message"
+      ? config.fbAutoReplyMessages
+      : event.event_type === "mention"
+        ? config.fbAutoReplyMentions
+        : config.fbAutoReplyComments;
   if (autoReply) {
     try {
-      if (event.event_type === "comment") {
+      if (event.event_type === "message") {
+        await sendTypingOn(event.from_id, page.token);
         await wait(typingDelayMs(event.proposed_reply));
-        await replyToComment(event.platform_event_id, event.proposed_reply);
+        await sendMessengerMessage(event.from_id, event.proposed_reply, page.token);
       } else {
-        await sendTypingOn(event.from_id);
+        // "comment" and "mention" both reply as a comment on the relevant
+        // post/comment object — a mention reply is posted on the mentioning
+        // post, since that's the only public reply surface for a mention.
         await wait(typingDelayMs(event.proposed_reply));
-        await sendMessengerMessage(event.from_id, event.proposed_reply);
+        await replyToComment(event.platform_event_id, event.proposed_reply, page.token);
       }
       updateEvent(event.id, { status: "sent" });
       await notifyFbSent({ ...event, status: "sent" });
@@ -118,20 +128,20 @@ async function routeGeneratedReply(event) {
 // it gets the same treatment: reply with a comment on their post.
 const PAGE_POST_ITEMS = new Set(["status", "photo", "video", "link", "note", "share"]);
 
-async function handleCommentChange(change) {
+async function handleCommentChange(change, page) {
   const value = change.value ?? {};
   if (value.verb !== "add") return;
 
   const fromId = value.from?.id;
-  if (fromId && fromId === config.facebookPageId) return; // our own post/reply, re-delivered
+  if (fromId && fromId === page.pageId) return; // our own post/reply, re-delivered
 
-  if (value.item === "comment") return handleComment(value, fromId);
+  if (value.item === "comment") return handleComment(value, fromId, page);
   if (PAGE_POST_ITEMS.has(value.item) && value.post_id && !value.comment_id) {
-    return handlePagePost(value, fromId);
+    return handlePagePost(value, fromId, page);
   }
 }
 
-async function handleComment(value, fromId) {
+async function handleComment(value, fromId, page) {
   const commentId = value.comment_id;
   if (!commentId || eventExists(commentId)) return;
 
@@ -142,7 +152,7 @@ async function handleComment(value, fromId) {
   const message = (value.message ?? "").trim();
   if (!message) return;
 
-  const postContext = value.post_id ? await fetchPostContext(value.post_id) : "";
+  const postContext = value.post_id ? await fetchPostContext(value.post_id, page.token) : "";
 
   if (isPaused(fromId)) {
     return recordPausedIncoming({
@@ -152,6 +162,7 @@ async function handleComment(value, fromId) {
       fromName: value.from?.name,
       content: message,
       postContext,
+      page,
     });
   }
 
@@ -162,6 +173,7 @@ async function handleComment(value, fromId) {
     postContext,
     fromName: value.from?.name,
     history,
+    page,
   });
 
   const eventId = createEvent({
@@ -173,12 +185,13 @@ async function handleComment(value, fromId) {
     post_context: postContext,
     proposed_reply: proposedReply,
     topic,
+    page_key: page.key,
   });
 
-  await routeGeneratedReply(getEvent(eventId));
+  await routeGeneratedReply(getEvent(eventId), page);
 }
 
-async function handlePagePost(value, fromId) {
+async function handlePagePost(value, fromId, page) {
   const postId = value.post_id;
   if (eventExists(postId)) return;
 
@@ -192,6 +205,7 @@ async function handlePagePost(value, fromId) {
       fromId,
       fromName: value.from?.name,
       content: message,
+      page,
     });
   }
 
@@ -201,6 +215,7 @@ async function handlePagePost(value, fromId) {
     content: message,
     fromName: value.from?.name,
     history,
+    page,
   });
 
   const eventId = createEvent({
@@ -212,12 +227,63 @@ async function handlePagePost(value, fromId) {
     post_context: null,
     proposed_reply: proposedReply,
     topic,
+    page_key: page.key,
   });
 
-  await routeGeneratedReply(getEvent(eventId));
+  await routeGeneratedReply(getEvent(eventId), page);
 }
 
-async function handleMessagingEvent(messaging) {
+// Someone tags/mentions the Page in their own post or comment — distinct
+// from a comment on our own content. Never seen live in this codebase before
+// (unlike "feed"/"messaging", both validated against real Meta traffic
+// during the original rollout) — field names below are best-effort per
+// general Meta Page-webhook convention, not a captured real payload. Log the
+// raw change object on the first several live firings to confirm the actual
+// shape before trusting this parsing.
+async function handleMentionChange(change, page) {
+  const value = change.value ?? {};
+  if (value.verb && value.verb !== "add") return;
+
+  const objectId = value.comment_id ?? value.post_id;
+  if (!objectId || eventExists(objectId)) return;
+
+  const fromId = value.sender_id ?? value.from?.id;
+  if (fromId && fromId === page.pageId) return; // defensive echo filter, unconfirmed whether this field even echoes
+
+  const fromName = value.sender_name ?? value.from?.name ?? null;
+
+  if (isPaused(fromId)) {
+    return recordPausedIncoming({
+      eventType: "mention",
+      platformEventId: objectId,
+      fromId,
+      fromName,
+      content: "[mention]",
+      page,
+    });
+  }
+
+  // Fetched purely for a readable Telegram notification — the reply itself
+  // is a fixed template, no AI call reads this.
+  const postText = await fetchPostContext(objectId, page.token);
+  const proposedReply = getMentionReplyText(page);
+
+  const eventId = createEvent({
+    platform_event_id: objectId,
+    event_type: "mention",
+    from_id: fromId ?? null,
+    from_name: fromName,
+    content: postText || "[mention, no readable text]",
+    post_context: null,
+    proposed_reply: proposedReply,
+    topic: null,
+    page_key: page.key,
+  });
+
+  await routeGeneratedReply(getEvent(eventId), page);
+}
+
+async function handleMessagingEvent(messaging, page) {
   const msg = messaging.message;
   const mid = msg?.mid;
   const senderId = messaging.sender?.id;
@@ -235,7 +301,7 @@ async function handleMessagingEvent(messaging) {
   const imageOnly = !text && hasImage;
 
   if (isPaused(senderId)) {
-    return recordPausedIncoming({ eventType: "message", platformEventId: mid, fromId: senderId, content });
+    return recordPausedIncoming({ eventType: "message", platformEventId: mid, fromId: senderId, content, page });
   }
 
   // Record the message straight away — before the coalescing hold and the AI
@@ -253,6 +319,7 @@ async function handleMessagingEvent(messaging) {
     proposed_reply: null,
     topic: null,
     status: "received",
+    page_key: page.key,
   });
 
   // Hold briefly, then bow out if the sender has since said something newer —
@@ -278,16 +345,16 @@ async function handleMessagingEvent(messaging) {
 
   // Image-only DMs have no text to detect language from, and if this is also
   // the sender's first message, no history either — the account's own
-  // Messenger locale is a real signal instead of blindly guessing Portuguese.
-  // Cached indefinitely per sender (see db.js), so this only ever costs one
-  // Graph API call per sender's lifetime, not per message.
+  // Messenger locale is a real signal instead of blindly guessing. Cached
+  // indefinitely per sender (see db.js), so this only ever costs one Graph
+  // API call per sender's lifetime, not per message.
   let accountLocale = null;
   if (imageOnly) {
     const cached = getSenderLocale(senderId);
     if (cached.cached) {
       accountLocale = cached.locale;
     } else {
-      accountLocale = await fetchUserLocale(senderId);
+      accountLocale = await fetchUserLocale(senderId, page.token);
       setSenderLocale(senderId, accountLocale);
     }
   }
@@ -302,6 +369,7 @@ async function handleMessagingEvent(messaging) {
       followUpTopic: pendingNudge?.topic ?? null,
       imageOnly,
       accountLocale,
+      page,
     }));
   } catch (err) {
     updateEvent(eventId, { status: "failed" });
@@ -311,7 +379,7 @@ async function handleMessagingEvent(messaging) {
 
   if (pendingNudge) updateEvent(pendingNudge.id, { followup_status: "replied" });
 
-  await routeGeneratedReply(getEvent(eventId));
+  await routeGeneratedReply(getEvent(eventId), page);
 
   // Only schedule a follow-up once the answer has actually reached them —
   // not while it's stuck pending Telegram review or if the send failed.
@@ -321,19 +389,33 @@ async function handleMessagingEvent(messaging) {
   }
 }
 
+// Pages whose entry.id showed up in a webhook but aren't configured (missing
+// id/token env vars, or a stray Page not meant for this app) — warned once
+// each so a flood of events from an unconfigured Page doesn't spam the logs.
+const warnedUnconfiguredPageIds = new Set();
+
 async function processPayload(body) {
   for (const entry of body.entry ?? []) {
+    const page = getPageByFbId(entry.id);
+    if (!page) {
+      if (!warnedUnconfiguredPageIds.has(entry.id)) {
+        warnedUnconfiguredPageIds.add(entry.id);
+        console.warn(`[fbresponder/webhook] entry for unconfigured Page id ${entry.id} — skipping`);
+      }
+      continue;
+    }
+
     for (const change of entry.changes ?? []) {
-      if (change.field !== "feed") continue;
       try {
-        await handleCommentChange(change);
+        if (change.field === "feed") await handleCommentChange(change, page);
+        else if (change.field === "mention") await handleMentionChange(change, page);
       } catch (err) {
-        console.error("[fbresponder/webhook] comment handling failed:", err);
+        console.error("[fbresponder/webhook] comment/mention handling failed:", err);
       }
     }
     for (const messaging of entry.messaging ?? []) {
       try {
-        await handleMessagingEvent(messaging);
+        await handleMessagingEvent(messaging, page);
       } catch (err) {
         console.error("[fbresponder/webhook] message handling failed:", err);
       }
@@ -342,13 +424,16 @@ async function processPayload(body) {
 }
 
 /**
- * Receives Meta Page webhooks (comments via the "feed" field, Messenger DMs
- * via "messaging") for the ifound Page. GET handles the subscription
- * verification handshake; POST verifies X-Hub-Signature-256 before trusting
- * the payload, acks immediately (Meta expects a fast response), then
- * generates a reply and either queues it for Telegram approval or sends it
- * directly when the relevant auto-reply flag is set (FB_AUTO_REPLY_MESSAGES
- * / FB_AUTO_REPLY_COMMENTS, checked independently per event type).
+ * Receives Meta Page webhooks (comments/mentions via the "feed"/"mention"
+ * fields, Messenger DMs via "messaging") for every configured ifound Page
+ * (see pages.js) — Meta batches every subscribed Page of this app into the
+ * same POST's entry[], disambiguated by entry.id. GET handles the
+ * subscription verification handshake; POST verifies X-Hub-Signature-256
+ * before trusting the payload, acks immediately (Meta expects a fast
+ * response), then generates a reply and either queues it for Telegram
+ * approval or sends it directly when the relevant auto-reply flag is set
+ * (FB_AUTO_REPLY_MESSAGES / FB_AUTO_REPLY_COMMENTS / FB_AUTO_REPLY_MENTIONS,
+ * checked independently per event type).
  */
 export function startWebhookServer() {
   const server = http.createServer((req, res) => {

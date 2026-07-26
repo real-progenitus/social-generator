@@ -1,8 +1,10 @@
 import { config } from "../config.js";
 import { callClaude } from "../lib/claudeClient.js";
+import { callDeepSeek } from "../lib/deepseekClient.js";
 import { tg } from "../lib/telegram.js";
 import { findDueFollowUps, updateEvent } from "./db.js";
 import { sendMessengerMessage } from "./graph.js";
+import { getPageByKey } from "./pages.js";
 
 // How long to wait after answering a DM on a FOLLOW_UP_TOPICS topic (see
 // db.js) with no reply before proactively checking in, and how often the
@@ -36,20 +38,38 @@ const NUDGE_LABELS = {
   post_redirect: "post-redirect",
 };
 
+// DeepSeek primary, Claude fallback — same reasoning as generateReply.js's
+// switch (routing around the 2026-07-24 Anthropic credit-balance outage).
 async function craftNudgeText(priorReply, topic) {
   if (config.mockMode) return MOCK_NUDGES[topic] ?? MOCK_NUDGES.photo_help;
 
-  const response = await callClaude({
-    account: "ifound",
-    operation: "fbNudge",
-    model: config.claudeModel,
-    max_tokens: 100,
-    thinking: { type: "disabled" },
-    system: NUDGE_INSTRUCTIONS[topic] ?? NUDGE_INSTRUCTIONS.photo_help,
-    messages: [{ role: "user", content: priorReply }],
-  });
-  const text = response.content.find((b) => b.type === "text")?.text ?? "";
-  return text.trim();
+  const system = NUDGE_INSTRUCTIONS[topic] ?? NUDGE_INSTRUCTIONS.photo_help;
+  try {
+    const text = await callDeepSeek({
+      account: "ifound",
+      operation: "fbNudge",
+      model: config.deepseekModel,
+      // See generateReply.js's DeepSeek call for why this is well above the
+      // Claude equivalent (100) — reasoning_content eats into this budget.
+      maxTokens: 400,
+      system,
+      user: priorReply,
+    });
+    return text.trim();
+  } catch (err) {
+    console.warn(`[fbresponder/followup] DeepSeek failed (${err.message}); falling back to Claude`);
+    const response = await callClaude({
+      account: "ifound",
+      operation: "fbNudge",
+      model: config.claudeModel,
+      max_tokens: 100,
+      thinking: { type: "disabled" },
+      system,
+      messages: [{ role: "user", content: priorReply }],
+    });
+    const text = response.content.find((b) => b.type === "text")?.text ?? "";
+    return text.trim();
+  }
 }
 
 async function sendFollowUp(event) {
@@ -59,12 +79,13 @@ async function sendFollowUp(event) {
   // webhook.js), which carries no real language signal and previously made
   // the nudge default to English even when the initial reply correctly went
   // out in another language via the locale fallback.
+  const page = getPageByKey(event.page_key) ?? getPageByKey("default");
   const text = await craftNudgeText(event.proposed_reply, event.topic);
-  await sendMessengerMessage(event.from_id, text);
+  await sendMessengerMessage(event.from_id, text, page.token);
   updateEvent(event.id, { followup_status: "nudge_sent" });
   await tg("sendMessage", {
     chat_id: config.telegramChatId,
-    text: `👋 Sent ${NUDGE_LABELS[event.topic] ?? "follow-up"} nudge to ${event.from_name || "someone"} (#${event.id}):\n${text}`,
+    text: `👋 ${page.label} Sent ${NUDGE_LABELS[event.topic] ?? "follow-up"} nudge to ${event.from_name || "someone"} (#${event.id}):\n${text}`,
   });
 }
 

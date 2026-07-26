@@ -1,12 +1,10 @@
-import { config } from "../config.js";
-
 const GRAPH = "https://graph.facebook.com/v21.0";
 
-async function graph(method, endpoint, params) {
+async function graph(method, endpoint, params, accessToken) {
   const url = new URL(`${GRAPH}/${endpoint}`);
   const search = new URLSearchParams({
     ...params,
-    access_token: config.facebookPageAccessToken,
+    access_token: accessToken,
   });
   let res;
   if (method === "GET") {
@@ -24,33 +22,44 @@ async function graph(method, endpoint, params) {
   return json;
 }
 
-export async function replyToComment(commentId, message) {
-  return graph("POST", `${commentId}/comments`, { message });
+export async function replyToComment(commentId, message, accessToken) {
+  return graph("POST", `${commentId}/comments`, { message }, accessToken);
 }
 
-export async function sendMessengerMessage(recipientId, text) {
-  return graph("POST", "me/messages", {
-    recipient: JSON.stringify({ id: recipientId }),
-    message: JSON.stringify({ text }),
-    messaging_type: "RESPONSE",
-  });
+export async function sendMessengerMessage(recipientId, text, accessToken) {
+  return graph(
+    "POST",
+    "me/messages",
+    {
+      recipient: JSON.stringify({ id: recipientId }),
+      message: JSON.stringify({ text }),
+      messaging_type: "RESPONSE",
+    },
+    accessToken,
+  );
 }
 
 // Messenger's own "is typing…" indicator - shows for a few seconds (or
 // until a message is sent). Used to make auto-sent replies read as a person
 // typing rather than a reply appearing out of nowhere.
-export async function sendTypingOn(recipientId) {
-  return graph("POST", "me/messages", {
-    recipient: JSON.stringify({ id: recipientId }),
-    sender_action: "typing_on",
-  });
+export async function sendTypingOn(recipientId, accessToken) {
+  return graph(
+    "POST",
+    "me/messages",
+    {
+      recipient: JSON.stringify({ id: recipientId }),
+      sender_action: "typing_on",
+    },
+    accessToken,
+  );
 }
 
 // Grounds a comment reply in what the parent post actually said, rather than
-// generating from the bare comment text alone.
-export async function fetchPostContext(postId) {
+// generating from the bare comment text alone. Also reused for mentions, to
+// pull a readable snippet of the mentioning post/comment for Telegram.
+export async function fetchPostContext(postId, accessToken) {
   try {
-    const { message } = await graph("GET", postId, { fields: "message" });
+    const { message } = await graph("GET", postId, { fields: "message" }, accessToken);
     return message ?? "";
   } catch (err) {
     console.error(`[fbresponder/graph] failed to fetch post context for ${postId}:`, err.message);
@@ -65,9 +74,9 @@ export async function fetchPostContext(postId) {
 // whether "locale" still returns real data for arbitrary PSIDs is unverified
 // here - so this must degrade to null on any error or empty response, never
 // throw, so callers can always fall back to today's default behavior.
-export async function fetchUserLocale(psid) {
+export async function fetchUserLocale(psid, accessToken) {
   try {
-    const { locale } = await graph("GET", psid, { fields: "locale" });
+    const { locale } = await graph("GET", psid, { fields: "locale" }, accessToken);
     return locale || null;
   } catch (err) {
     console.error(`[fbresponder/graph] failed to fetch locale for ${psid}:`, err.message);
