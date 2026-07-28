@@ -56,7 +56,12 @@ function wait(ms) {
 // handleMessagingEvent — so a burst gets one combined answer and one Claude
 // call instead of one reply per message. Stacks before routeGeneratedReply's
 // own 2–9s typing delay. Env-overridable mainly so tests can shrink it.
-const COALESCE_WINDOW_MS = Number(process.env.FB_COALESCE_WINDOW_MS) || 10000;
+// Was 10000 until 2026-07-28: production data showed real consecutive-bubble
+// gaps of 11s and 20s both landing just outside a 10s window, splitting one
+// burst into 3 separate replies (see fbresponder memory) — 30s comfortably
+// covers that gap distribution at the cost of 30s of added latency on every
+// reply, burst or not.
+const COALESCE_WINDOW_MS = Number(process.env.FB_COALESCE_WINDOW_MS) || 30000;
 
 // Placeholder stored/shown for a photo-only DM (no caption) so the row, the
 // model context, and the Telegram notification all read sensibly.
