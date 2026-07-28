@@ -43,6 +43,13 @@ export const config = {
   // env without a deploy if that ever changes.
   foodSearchShare: Number(process.env.FOOD_SEARCH_SHARE ?? 0),
 
+  // Google Gemini — vision-only role in this codebase: reading image content
+  // (e.g. OCR'ing a flyer's language) for the ifound DM responder, since
+  // DeepSeek's API is text-only and Claude vision is the fallback engine, not
+  // the primary one, right now. See generateReply.js's describeImageViaGemini.
+  geminiApiKey: process.env.GEMINI_API_KEY ?? "",
+  geminiVisionModel: process.env.GEMINI_VISION_MODEL ?? "gemini-2.5-flash",
+
   xaiApiKey: process.env.XAI_API_KEY ?? "",
   grokImageModel: process.env.GROK_IMAGE_MODEL ?? "grok-2-image",
   // Second model the food account's cover generator alternates in against

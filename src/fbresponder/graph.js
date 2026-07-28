@@ -83,3 +83,15 @@ export async function fetchUserLocale(psid, accessToken) {
     return null;
   }
 }
+
+// Downloads a DM image attachment's bytes for the Gemini vision hop (see
+// generateReply.js's describeImageViaGemini). These are Meta CDN URLs handed
+// to us directly in the webhook payload (attachment.payload.url) - public,
+// signed, no page access token needed, unlike the rest of this file.
+export async function fetchImageBase64(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Image fetch failed: ${res.status}`);
+  const mimeType = res.headers.get("content-type") ?? "image/jpeg";
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return { base64: buffer.toString("base64"), mimeType };
+}

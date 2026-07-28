@@ -297,8 +297,12 @@ async function handleMessagingEvent(messaging, page) {
   const text = (msg.text ?? "").trim();
   // Only real photos count as "they want to report something" — stickers, GIF
   // reactions and thumbs-up/like taps (other attachment types) are noise and
-  // stay ignored, same as before.
-  const hasImage = (msg.attachments ?? []).some((a) => a.type === "image");
+  // stay ignored, same as before. imageUrl (Meta's CDN URL for the first
+  // image attachment) feeds the Gemini vision hop in generateReply.js,
+  // whether or not there's also a caption — a flyer's visible text matters
+  // even when the sender wrote something too.
+  const imageUrl = (msg.attachments ?? []).find((a) => a.type === "image")?.payload?.url ?? null;
+  const hasImage = !!imageUrl;
   if (!text && !hasImage) return; // nothing actionable (empty, or sticker/like only)
   if (eventExists(mid)) return; // already processed (Meta re-delivery)
 
@@ -373,6 +377,7 @@ async function handleMessagingEvent(messaging, page) {
       history,
       followUpTopic: pendingNudge?.topic ?? null,
       imageOnly,
+      imageUrl,
       accountLocale,
       page,
     }));

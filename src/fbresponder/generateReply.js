@@ -1,6 +1,8 @@
 import { config } from "../config.js";
 import { callClaude } from "../lib/claudeClient.js";
 import { callDeepSeek } from "../lib/deepseekClient.js";
+import { callGeminiVision } from "../lib/geminiClient.js";
+import { fetchImageBase64 } from "./graph.js";
 
 // Both interpolated below: `${fallbackLanguage}` (STEP 0's tie-breaker
 // default, was hardcoded "Portuguese" back when there was only one Page) and
@@ -257,6 +259,53 @@ function imageOnlyNote(page) {
   );
 }
 
+// Gemini is used ONLY to read image content, never to write the reply -
+// generateReplyViaDeepSeek/Claude below never see the image itself, just
+// this text description folded into contextLines. DeepSeek's API is
+// text-only (confirmed against DeepSeek's own docs) and Claude vision is the
+// fallback engine here, not the primary one, so this keeps the reply-writer
+// unchanged and only adds a vision hop upstream of it. Graceful-degrade
+// shape matches fetchUserLocale in graph.js: any failure (bad key, network,
+// unsupported format) returns null so a vision hiccup can never drop or
+// block a reply - the caller falls back to today's pre-vision behavior.
+async function describeImageViaGemini(imageUrl) {
+  try {
+    const { base64, mimeType } = await fetchImageBase64(imageUrl);
+    const text = await callGeminiVision({
+      account: "ifound",
+      operation: "fbImageDescribe",
+      imageBase64: base64,
+      mimeType,
+      prompt:
+        "This image was sent as a Facebook Messenger DM to a lost-and-found app's Page. In 2-3 short factual " +
+        "lines: (1) any visible text, verbatim, and what language it's in; (2) what the image shows (e.g. a " +
+        "lost-pet flyer, a photo of an item, a screenshot). Don't speculate beyond what's visible.",
+    });
+    return text.trim();
+  } catch (err) {
+    console.warn(`[fbresponder/generateReply] Gemini image description failed (${err.message})`);
+    return null;
+  }
+}
+
+// Injected whenever a DM's image was successfully read by Gemini - replaces
+// the old "you cannot detect language from an image" framing now that we
+// often actually can. Applies whether or not the sender also wrote a caption
+// (see webhook.js's imageUrl extraction, which isn't gated on imageOnly) - a
+// flyer's own text is a decisive STEP 0 language signal on its own merits,
+// same as if the sender had typed it.
+function imageVisionNote(description) {
+  return (
+    "\n\nIMAGE CONTENT (read by a separate vision model, not you): " +
+    description +
+    " If this description reports visible text, apply STEP 0's decisive-marker rules to that text exactly as " +
+    "if the sender had typed it themselves - it can settle the reply language on its own, even overriding a " +
+    "differently-worded caption if the image text is more decisive. If no legible text was found, use this only " +
+    "as context about what they're reporting, and fall back to the caption/history/page-default language chain " +
+    "as usual."
+  );
+}
+
 // Maps a Messenger account locale prefix to a language name for the
 // image-only hint below. Generalized beyond just PT/ES since a sender's
 // account could be set to any locale, not only the two languages this Page
@@ -452,6 +501,7 @@ export async function generateReply({
   history,
   followUpTopic = null,
   imageOnly = false,
+  imageUrl = null,
   accountLocale = null,
   page,
 }) {
@@ -459,6 +509,8 @@ export async function generateReply({
     console.log("[fbresponder/generateReply] MOCK_MODE — returning canned reply");
     return MOCK_REPLY;
   }
+
+  const imageDescription = imageUrl ? await describeImageViaGemini(imageUrl) : null;
 
   const contextLines =
     renderHistory(history) +
@@ -471,7 +523,11 @@ export async function generateReply({
       .filter(Boolean)
       .join("\n") +
     (imageOnly ? "" : detectLanguageHint(content)) +
-    (imageOnly ? imageOnlyNote(page) + accountLocaleHint(accountLocale) : "") +
+    (imageDescription
+      ? imageVisionNote(imageDescription)
+      : imageOnly
+        ? imageOnlyNote(page) + accountLocaleHint(accountLocale)
+        : "") +
     (followUpTopic ? (FOLLOW_UP_NOTES[followUpTopic] ?? "") : "");
 
   try {
