@@ -42,16 +42,28 @@ export async function sendMessengerMessage(recipientId, text, accessToken) {
 // Messenger's own "is typing…" indicator - shows for a few seconds (or
 // until a message is sent). Used to make auto-sent replies read as a person
 // typing rather than a reply appearing out of nowhere.
+//
+// Purely cosmetic, so it must never throw: Meta rejects sender_actions on
+// their own terms (seen live on 2026-07-31 as "(#100) Sender action failed",
+// subcode 2018048) and this used to be the first await in routeGeneratedReply's
+// try block, so one refused typing bubble aborted the real reply that had
+// already been generated and paid for - the person just got silence. Same
+// degrade-don't-throw contract as fetchPostContext/fetchUserLocale above.
 export async function sendTypingOn(recipientId, accessToken) {
-  return graph(
-    "POST",
-    "me/messages",
-    {
-      recipient: JSON.stringify({ id: recipientId }),
-      sender_action: "typing_on",
-    },
-    accessToken,
-  );
+  try {
+    return await graph(
+      "POST",
+      "me/messages",
+      {
+        recipient: JSON.stringify({ id: recipientId }),
+        sender_action: "typing_on",
+      },
+      accessToken,
+    );
+  } catch (err) {
+    console.error(`[fbresponder/graph] typing indicator failed for ${recipientId}:`, err.message);
+    return null;
+  }
 }
 
 // Grounds a comment reply in what the parent post actually said, rather than
