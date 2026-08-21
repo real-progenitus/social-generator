@@ -15,7 +15,10 @@ import { startWebhookServer } from "./webhook.js";
  */
 export async function startFbResponder() {
   requireConfig([
-    "anthropicApiKey",
+    // The reply/nudge engine — no Anthropic key is needed any more, the
+    // responder writes every reply with DeepSeek (see generateReply.js).
+    // geminiApiKey is deliberately absent: image reading degrades gracefully.
+    "deepseekApiKey",
     "telegramBotToken",
     "telegramChatId",
     "facebookPageId",

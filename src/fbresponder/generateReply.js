@@ -1,6 +1,5 @@
 import { config } from "../config.js";
-import { callClaude } from "../lib/claudeClient.js";
-import { callDeepSeek } from "../lib/deepseekClient.js";
+import { callDeepSeekWithRetry } from "../lib/deepseekClient.js";
 import { callGeminiVision } from "../lib/geminiClient.js";
 import { fetchImageBase64 } from "./graph.js";
 
@@ -177,10 +176,11 @@ function ptDialectBlock(dialect) {
   );
 }
 
-// One cache entry per distinct (language, ptDialect) pair actually seen —
-// 6 variants across the current 13 Pages — each still individually cached
-// Anthropic-side via cache_control below, just as N cache entries instead of
-// the single global one this had back when there was only one Page.
+// One built prompt per distinct (language, ptDialect) pair actually seen — 6
+// variants across the current 13 Pages. This is a local memo of the assembled
+// string; repeat-prompt discounting is now DeepSeek's automatic server-side
+// prompt cache (see prompt_cache_hit_tokens in its usage response), so there
+// is no longer a cache_control block to declare per variant.
 const systemPromptCache = new Map();
 function systemPromptFor(page) {
   const cacheKey = `${page.language}|${page.ptDialect}`;
@@ -190,38 +190,12 @@ function systemPromptFor(page) {
   return systemPromptCache.get(cacheKey);
 }
 
-const REPLY_SCHEMA = {
-  type: "object",
-  properties: {
-    // Ordered before `reply` deliberately - structured JSON output generates
-    // fields in declared property order, and thinking is disabled for this
-    // call (see callClaude below), so this is the model's only scratch space
-    // to commit to a language before writing the reply itself.
-    detected_language: {
-      type: "string",
-      description:
-        "The sender's language for THIS message only, per STEP 0's decisive-marker rules, expressed as a " +
-        "short language name (e.g. \"Portuguese\", \"Spanish\", \"English\"). Decide this before writing " +
-        "the reply.",
-    },
-    reply: { type: "string", description: "The reply text to send to the user, following all rules above." },
-    topic: {
-      type: "string",
-      enum: ["photo_help", "post_redirect", "other"],
-      description:
-        "'photo_help' if this reply answers a question about adding/uploading a photo, or a complaint " +
-        "that they can't add one. 'post_redirect' if this reply includes the ifound download link because " +
-        "the sender is reporting, or trying to report, a lost/found item. 'other' for everything else.",
-    },
-  },
-  required: ["detected_language", "reply", "topic"],
-  additionalProperties: false,
-};
-
-// DeepSeek's json_object mode has no schema enforcement (mirrors REPLY_SCHEMA
-// above, which Claude's structured output enforces directly) — see
-// generateFact.js's JSON_SHAPE_INSTRUCTION for the same pattern elsewhere in
-// this repo. The word "json" must appear for response_format to take effect.
+// DeepSeek's json_object mode has no schema enforcement, so the exact shape is
+// spelled out here — see generateFact.js's JSON_SHAPE_INSTRUCTION for the same
+// pattern elsewhere in this repo. detected_language is listed first
+// deliberately: fields are generated in declared order, so it is the model's
+// scratch space to commit to a language before it writes the reply.
+// The word "json" must appear for response_format to take effect.
 const DEEPSEEK_JSON_SHAPE_INSTRUCTION =
   "\n\nRespond with a single valid json object and nothing else (no markdown, no code fences), with exactly " +
   "these keys: detected_language (the sender's language for THIS message only, per STEP 0 above, as a short " +
@@ -260,11 +234,10 @@ function imageOnlyNote(page) {
 }
 
 // Gemini is used ONLY to read image content, never to write the reply -
-// generateReplyViaDeepSeek/Claude below never see the image itself, just
-// this text description folded into contextLines. DeepSeek's API is
-// text-only (confirmed against DeepSeek's own docs) and Claude vision is the
-// fallback engine here, not the primary one, so this keeps the reply-writer
-// unchanged and only adds a vision hop upstream of it. Graceful-degrade
+// generateReplyViaDeepSeek below never sees the image itself, just this text
+// description folded into contextLines. The configured DeepSeek text model is
+// text-only (confirmed against DeepSeek's own docs), so this keeps the
+// reply-writer unchanged and only adds a vision hop upstream of it. Graceful-degrade
 // shape matches fetchUserLocale in graph.js: any failure (bad key, network,
 // unsupported format) returns null so a vision hiccup can never drop or
 // block a reply - the caller falls back to today's pre-vision behavior.
@@ -446,51 +419,33 @@ function finalizeParsed(parsed) {
   };
 }
 
-// DeepSeek is the primary path (cheap, and doesn't share Anthropic's billing
-// pool — see the 2026-07-24 credit-balance outage this was added to route
-// around), with Claude kept as the fallback on any error, same resilience
-// shape as generateFact.js's withClaudeFallback.
+// DeepSeek is the only path. Claude was the fallback until 2026-08-21, when a
+// real DM went unanswered because DeepSeek returned empty content and the
+// Claude fallback hit "credit balance is too low" — an ifound reply has no
+// business depending on a second provider's billing staying topped up.
+// Resilience now comes from callDeepSeekWithRetry's ladder, not another vendor.
 async function generateReplyViaDeepSeek(page, contextLines) {
-  const text = await callDeepSeek({
+  const text = await callDeepSeekWithRetry({
     account: "ifound",
     operation: "fbReply",
+    onRetry: (err, attempt) =>
+      console.warn(`[fbresponder/generateReply] DeepSeek attempt ${attempt} failed (${err.message}); retrying`),
     model: config.deepseekModel,
     jsonMode: true,
-    // Well above Claude's 400 (which has thinking disabled) — deepseek-v4-flash
-    // is a reasoning model that spends part of this budget on hidden
+    // deepseek-v4-flash is a reasoning model that spends part of this budget on hidden
     // reasoning_content before it ever writes the visible reply. Reasoning
     // length is unpredictable and does NOT correlate with input length —
     // short, ambiguous inputs (exactly the hard language-detection cases this
     // prompt cares most about) can trigger MORE reasoning than long clear
     // ones, and too tight a budget truncates the JSON mid-string rather than
     // just shortening the reply (confirmed while wiring this up).
+    // callDeepSeekWithRetry's last attempt drops reasoning entirely if this
+    // budget still isn't enough.
     maxTokens: 3000,
     system: systemPromptFor(page) + DEEPSEEK_JSON_SHAPE_INSTRUCTION,
     user: contextLines,
   });
   return finalizeParsed(parseReplyJson(text));
-}
-
-async function generateReplyViaClaude(page, contextLines) {
-  const response = await callClaude({
-    account: "ifound",
-    operation: "fbReply",
-    model: config.claudeModel,
-    max_tokens: 400,
-    // Classification + short templated reply, not a reasoning task — skip
-    // thinking so the 400-token budget goes entirely to the reply instead of
-    // competing with adaptive thinking (on by default for claude-sonnet-5).
-    thinking: { type: "disabled" },
-    // One of a handful of page-specific variants (see systemPromptFor) — each
-    // reused across every call for that page's language/dialect, cached
-    // instead of paying full input price each time.
-    system: [{ type: "text", text: systemPromptFor(page), cache_control: { type: "ephemeral" } }],
-    messages: [{ role: "user", content: contextLines }],
-    output_config: { format: { type: "json_schema", schema: REPLY_SCHEMA } },
-  });
-
-  const text = response.content.find((b) => b.type === "text")?.text ?? "{}";
-  return finalizeParsed(JSON.parse(text));
 }
 
 export async function generateReply({
@@ -530,10 +485,5 @@ export async function generateReply({
         : "") +
     (followUpTopic ? (FOLLOW_UP_NOTES[followUpTopic] ?? "") : "");
 
-  try {
-    return await generateReplyViaDeepSeek(page, contextLines);
-  } catch (err) {
-    console.warn(`[fbresponder/generateReply] DeepSeek failed (${err.message}); falling back to Claude`);
-    return generateReplyViaClaude(page, contextLines);
-  }
+  return generateReplyViaDeepSeek(page, contextLines);
 }

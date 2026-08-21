@@ -1,6 +1,5 @@
 import { config } from "../config.js";
-import { callClaude } from "../lib/claudeClient.js";
-import { callDeepSeek } from "../lib/deepseekClient.js";
+import { callDeepSeekWithRetry } from "../lib/deepseekClient.js";
 import { tg } from "../lib/telegram.js";
 import { findDueFollowUps, updateEvent } from "./db.js";
 import { sendMessengerMessage } from "./graph.js";
@@ -38,38 +37,24 @@ const NUDGE_LABELS = {
   post_redirect: "post-redirect",
 };
 
-// DeepSeek primary, Claude fallback — same reasoning as generateReply.js's
-// switch (routing around the 2026-07-24 Anthropic credit-balance outage).
+// DeepSeek only — see generateReply.js for why the Claude fallback is gone.
 async function craftNudgeText(priorReply, topic) {
   if (config.mockMode) return MOCK_NUDGES[topic] ?? MOCK_NUDGES.photo_help;
 
   const system = NUDGE_INSTRUCTIONS[topic] ?? NUDGE_INSTRUCTIONS.photo_help;
-  try {
-    const text = await callDeepSeek({
-      account: "ifound",
-      operation: "fbNudge",
-      model: config.deepseekModel,
-      // See generateReply.js's DeepSeek call for why this is well above the
-      // Claude equivalent (100) — reasoning_content eats into this budget.
-      maxTokens: 400,
-      system,
-      user: priorReply,
-    });
-    return text.trim();
-  } catch (err) {
-    console.warn(`[fbresponder/followup] DeepSeek failed (${err.message}); falling back to Claude`);
-    const response = await callClaude({
-      account: "ifound",
-      operation: "fbNudge",
-      model: config.claudeModel,
-      max_tokens: 100,
-      thinking: { type: "disabled" },
-      system,
-      messages: [{ role: "user", content: priorReply }],
-    });
-    const text = response.content.find((b) => b.type === "text")?.text ?? "";
-    return text.trim();
-  }
+  const text = await callDeepSeekWithRetry({
+    account: "ifound",
+    operation: "fbNudge",
+    model: config.deepseekModel,
+    onRetry: (err, attempt) =>
+      console.warn(`[fbresponder/followup] DeepSeek attempt ${attempt} failed (${err.message}); retrying`),
+    // A nudge is one short sentence, but reasoning_content draws down this same
+    // budget before any of it is written — see generateReply.js's DeepSeek call.
+    maxTokens: 400,
+    system,
+    user: priorReply,
+  });
+  return text.trim();
 }
 
 async function sendFollowUp(event) {
@@ -108,7 +93,17 @@ export function startFollowUpLoop() {
       try {
         await sendFollowUp(event);
       } catch (err) {
-        console.error(`[fbresponder/followup] send failed for #${event.id}:`, err);
+        // Leaving followup_status as 'awaiting' re-selects this event on every
+        // scan, forever: that loop is how one unavailable provider turned into
+        // 621 failed nudge calls in 30 days. A nudge is a nice-to-have on top
+        // of an answer the sender already got, so a failed one retires here
+        // rather than queueing indefinitely.
+        console.error(`[fbresponder/followup] send failed for #${event.id}, not retrying:`, err);
+        try {
+          updateEvent(event.id, { followup_status: "nudge_failed" });
+        } catch (markErr) {
+          console.error(`[fbresponder/followup] could not mark #${event.id} failed:`, markErr);
+        }
       }
     }
   }, CHECK_INTERVAL_MS);

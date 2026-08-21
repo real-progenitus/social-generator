@@ -115,6 +115,23 @@ export async function notifyFbSendFailed(event, err) {
   });
 }
 
+// The generation itself threw, so there is no proposed reply to show and
+// nothing was sent. Since 2026-08-21 the reply path has no second provider to
+// fall back on (see generateReply.js), which makes this the only warning that
+// a real person's message went unanswered — the fb_events status flip is
+// invisible unless someone goes looking, which is exactly how a DM sat
+// unanswered for 20 hours before anyone noticed.
+export async function notifyFbGenerateFailed(event, err) {
+  const page = resolvePage(event);
+  await tg("sendMessage", {
+    chat_id: config.telegramChatId,
+    text:
+      `⚠️ ${page.label} Could NOT generate a reply for ${label(event.event_type).toLowerCase()} from ${event.from_name || "someone"} (#${event.id}):\n${err.message}\n\n` +
+      `Them: ${event.content}\n\nNothing was sent — this one needs a human.`,
+    reply_markup: event.from_id ? takeoverKeyboard(event.from_id, false) : undefined,
+  });
+}
+
 // Toggles pause/resume for a sender and flips the button in place on the
 // same Telegram message, so there's no separate "list" to manage — whichever
 // notification you're looking at is always up to date.

@@ -24,7 +24,13 @@ import {
 } from "./graph.js";
 import { getMentionReplyText } from "./mentionTemplates.js";
 import { getPageByFbId } from "./pages.js";
-import { notifyFbSendFailed, notifyFbSent, notifyPausedIncoming, sendForFbApproval } from "./review.js";
+import {
+  notifyFbGenerateFailed,
+  notifyFbSendFailed,
+  notifyFbSent,
+  notifyPausedIncoming,
+  sendForFbApproval,
+} from "./review.js";
 
 // A sender currently under human takeover gets no AI call at all (that's the
 // whole point — stop paying for and sending bot replies to them) and no
@@ -383,6 +389,13 @@ async function handleMessagingEvent(messaging, page) {
     }));
   } catch (err) {
     updateEvent(eventId, { status: "failed" });
+    // Wrapped so a Telegram-side problem can't mask the original error — same
+    // shape as routeGeneratedReply's send-failure notify.
+    try {
+      await notifyFbGenerateFailed(getEvent(eventId), err);
+    } catch (notifyErr) {
+      console.error(`[fbresponder/webhook] failed to notify about #${eventId} generation failure:`, notifyErr);
+    }
     throw err;
   }
   updateEvent(eventId, { proposed_reply: proposedReply, topic });
