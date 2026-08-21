@@ -11,6 +11,7 @@ const USAGE = `Usage: node src/cli.js <command>
   serve            Serve the output/ dir over HTTP for the Instagram Graph API
   status           Show recent posts and their pipeline states
   fb-bot           Run the Facebook comment/message webhook + approval bot (run as a service)
+  gen-bot          Run the Telegram prompt -> pick-an-agent image/video bot (run as a service)
   metrics-server   Serve the AI cost + droplet-health dashboard (run as a service)
 `;
 
@@ -77,6 +78,11 @@ try {
     case "fb-bot": {
       const { startFbResponder } = await import("./fbresponder/main.js");
       await startFbResponder();
+      break;
+    }
+    case "gen-bot": {
+      const { startGenBot } = await import("./genbot/main.js");
+      await startGenBot();
       break;
     }
     case "metrics-server": {

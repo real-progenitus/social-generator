@@ -16,6 +16,8 @@
     "serve": "node src/cli.js serve",
     "status": "node src/cli.js status",
     "fb-bot": "node src/cli.js fb-bot",
+    "gen-bot": "node src/cli.js gen-bot",
+    "gen-bot:local": "node --env-file=.env.genbot src/cli.js gen-bot",
     "metrics-server": "node src/cli.js metrics-server"
   },
   "dependencies": {

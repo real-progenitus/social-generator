@@ -6,6 +6,21 @@ function bool(value, fallback) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
 
+// Declared credit for one provider, read from <PREFIX>_BUDGET_USD and
+// <PREFIX>_BUDGET_SINCE. Most image/video providers expose no balance API at
+// all, so the genbot shows "what you say you topped up, minus what this repo
+// has spent since then" (see src/genbot/budgets.js). `since` is the date of
+// that top-up — without it the sum would include spend the credit already
+// covered — and defaults to the epoch, i.e. all recorded spend counts.
+// usd null => no budget declared; the genbot then shows lifetime spend only.
+function budget(prefix) {
+  const usd = process.env[`${prefix}_BUDGET_USD`];
+  return {
+    usd: usd === undefined || usd === "" ? null : Number(usd),
+    since: process.env[`${prefix}_BUDGET_SINCE`] || "1970-01-01",
+  };
+}
+
 export const config = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
   claudeModel: process.env.CLAUDE_MODEL ?? "claude-sonnet-5",
@@ -49,6 +64,12 @@ export const config = {
   // the primary one, right now. See generateReply.js's describeImageViaGemini.
   geminiApiKey: process.env.GEMINI_API_KEY ?? "",
   geminiVisionModel: process.env.GEMINI_VISION_MODEL ?? "gemini-2.5-flash",
+  // Generation models for the Telegram genbot (src/genbot/) — separate from
+  // the vision model above, which only reads images. The image model is the
+  // "Nano Banana" family; the video model is Veo, which runs as a long-poll
+  // operation rather than a single request.
+  geminiImageModel: process.env.GEMINI_IMAGE_MODEL ?? "gemini-2.5-flash-image",
+  geminiVideoModel: process.env.GEMINI_VIDEO_MODEL ?? "veo-3.0-generate-001",
 
   xaiApiKey: process.env.XAI_API_KEY ?? "",
   grokImageModel: process.env.GROK_IMAGE_MODEL ?? "grok-2-image",
@@ -56,6 +77,37 @@ export const config = {
   // grokImageModel, to compare quality/cost side by side over time — see
   // generateFoodCover.js. Unused by the music (bass_vault) pipeline.
   grokImageModelAlt: process.env.GROK_IMAGE_MODEL_ALT ?? "grok-imagine-image",
+  // Video generation for the genbot. Unlike the image endpoint this one is
+  // asynchronous (POST returns a request_id you poll), so it runs through the
+  // gen_jobs table — see src/lib/videogen/grokVideo.js.
+  grokVideoModel: process.env.GROK_VIDEO_MODEL ?? "grok-imagine-video-1.5",
+  // Clamped to xAI's accepted 1–15s range at call time.
+  grokVideoSeconds: Number(process.env.GROK_VIDEO_SECONDS ?? 6),
+
+  // OpenAI — image/video generation for the genbot only; nothing in the
+  // content pipeline calls it. openaiAdminKey is optional and *different* from
+  // the regular key: only an admin key (sk-admin-…) can read the org Costs
+  // API, which is the sole way to get a real spend figure out of OpenAI. Left
+  // unset, the genbot falls back to budget-minus-local-spend like xAI/Gemini.
+  openaiApiKey: process.env.OPENAI_API_KEY ?? "",
+  openaiAdminKey: process.env.OPENAI_ADMIN_KEY ?? "",
+  openaiImageModel: process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-1",
+  openaiVideoModel: process.env.OPENAI_VIDEO_MODEL ?? "sora-2",
+
+  // fal.ai — an aggregator: one key and one prepaid balance covers FLUX,
+  // Ideogram, Kling and the rest, so it adds several genbot agents for one
+  // integration. It also exposes a real balance endpoint, which most direct
+  // providers don't (see src/genbot/balances.js).
+  falApiKey: process.env.FAL_API_KEY ?? "",
+
+  // Dedicated video providers for the genbot. Both expose a real credit
+  // balance; credits aren't dollars, so the *_USD_PER_CREDIT rates convert
+  // them for display (check each provider's current plan — the defaults are
+  // only a starting point).
+  runwayApiKey: process.env.RUNWAY_API_KEY ?? "",
+  runwayUsdPerCredit: Number(process.env.RUNWAY_USD_PER_CREDIT ?? 0.01),
+  lumaApiKey: process.env.LUMA_API_KEY ?? "",
+  lumaUsdPerCredit: Number(process.env.LUMA_USD_PER_CREDIT ?? 0.0004),
 
   // Path to a local image file — when set, generateCover uses it verbatim
   // instead of calling the xAI Grok API. For testing the render/review/
@@ -117,6 +169,25 @@ export const config = {
   // gate behind manual review first.
   fbAutoReplyMentions: bool(process.env.FB_AUTO_REPLY_MENTIONS, true),
   fbWebhookPort: Number(process.env.FB_WEBHOOK_PORT ?? 8791),
+
+  // Per-provider declared credit, keyed by the same provider string used in
+  // the api_calls table so budgets.js can join the two without a mapping.
+  // Only consumed by the genbot; every other service ignores it.
+  budgets: {
+    xai: budget("XAI"),
+    openai: budget("OPENAI"),
+    gemini: budget("GEMINI"),
+    fal: budget("FAL"),
+    runway: budget("RUNWAY"),
+    luma: budget("LUMA"),
+    anthropic: budget("ANTHROPIC"),
+    deepseek: budget("DEEPSEEK"),
+  },
+
+  // How long a live balance figure is reused before re-probing the provider.
+  // Keeps a burst of /balance taps from hammering five APIs; short enough that
+  // the number visibly moves after a generation.
+  balanceCacheTtlMs: Number(process.env.BALANCE_CACHE_TTL_MS ?? 60_000),
 };
 
 export function requireConfig(keys) {

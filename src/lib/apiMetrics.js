@@ -53,6 +53,18 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_system_samples_ts ON system_samples (ts);
 `);
 
+// Idempotent column addition for upgrading an existing metrics.db — CREATE
+// TABLE IF NOT EXISTS won't add a column to a table that predates it. Same
+// idiom as src/fbresponder/db.js. video_seconds exists because the genbot's
+// video agents (Veo, Sora, Kling, Runway, Luma) all price per second of
+// output, not per asset, so image_count can't carry their billable unit.
+for (const [column, type] of [["video_seconds", "REAL DEFAULT 0"]]) {
+  const exists = db
+    .prepare("SELECT 1 FROM pragma_table_info('api_calls') WHERE name = ?")
+    .get(column);
+  if (!exists) db.exec(`ALTER TABLE api_calls ADD COLUMN ${column} ${type}`);
+}
+
 export const metricsDb = db;
 
 // ---------------------------------------------------------------------------
@@ -111,6 +123,24 @@ function xaiImagePrice(model) {
   return XAI_IMAGE_PRICING[model] ?? Number(process.env.XAI_IMAGE_PRICE_USD ?? 0.07);
 }
 
+// Per-asset prices for the genbot's non-xAI generation models, keyed by the
+// exact model id sent to the provider. The genbot's registry passes its own
+// unitPriceUsd through to recordImageCall, so this table is the fallback for
+// a model whose registry entry omits a price — and the one place to correct a
+// rate without touching src/genbot/registry.js. Verify against each
+// provider's current pricing page when you change a deployed model id.
+const GEN_IMAGE_PRICING = {
+  // OpenAI gpt-image-1, 1024x1024 — quality tiers differ; this is 'high'.
+  "gpt-image-1": 0.17,
+  // Google Nano Banana / Imagen family.
+  "gemini-2.5-flash-image": 0.039,
+  "imagen-4.0-generate-001": 0.04,
+  // fal.ai model ids are slash-paths.
+  "fal-ai/flux-pro/v1.1-ultra": 0.06,
+  "fal-ai/flux/dev": 0.025,
+  "fal-ai/ideogram/v3": 0.06,
+};
+
 function claudeRates(model) {
   const entry = CLAUDE_PRICING[model];
   if (!entry) return null;
@@ -144,18 +174,20 @@ const insertStmt = db.prepare(`
   INSERT INTO api_calls
     (account, provider, model, operation, duration_ms,
      input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-     web_search_count, image_count, cost_usd, status, error_msg)
+     web_search_count, image_count, video_seconds, cost_usd, status, error_msg)
   VALUES
     (@account, @provider, @model, @operation, @duration_ms,
      @input_tokens, @output_tokens, @cache_read_tokens, @cache_creation_tokens,
-     @web_search_count, @image_count, @cost_usd, @status, @error_msg)
+     @web_search_count, @image_count, @video_seconds, @cost_usd, @status, @error_msg)
 `);
 
 // Recording is best-effort: instrumentation must never break generation or a
-// reply. Any DB/pricing error is logged and swallowed.
+// reply. Any DB/pricing error is logged and swallowed. video_seconds is
+// defaulted here rather than at every call site, so the four recorders that
+// predate the column stay unchanged.
 function safeInsert(row) {
   try {
-    insertStmt.run(row);
+    insertStmt.run({ video_seconds: 0, ...row });
   } catch (err) {
     console.error("[apiMetrics] failed to record call:", err.message);
   }
@@ -286,14 +318,34 @@ export function pruneSystemSamples(days = 30) {
 }
 
 /**
- * Record one xAI image generation call. Cost is per generated image; xAI image
- * responses carry no token usage.
+ * Record one image generation call. Cost is per generated image; image APIs
+ * carry no token usage.
+ *
+ * `provider` defaults to "xai" so the pipeline's existing generateCover /
+ * generateFoodCover call sites keep working untouched; the genbot passes its
+ * own ("openai" | "gemini" | "fal" | …) so every agent lands in this one table
+ * and the existing dashboard picks them up for free. `unitPriceUsd` likewise
+ * lets a genbot registry entry carry its own rate; without it the price falls
+ * back to the per-model tables above.
  */
-export function recordImageCall({ account, model, operation, durationMs, imageCount = 1, status = "ok", error }) {
+export function recordImageCall({
+  account,
+  provider = "xai",
+  model,
+  operation,
+  durationMs,
+  imageCount = 1,
+  unitPriceUsd,
+  status = "ok",
+  error,
+}) {
   const count = status === "ok" ? imageCount : 0;
+  const unit =
+    unitPriceUsd ??
+    (provider === "xai" ? xaiImagePrice(model) : GEN_IMAGE_PRICING[model]);
   safeInsert({
     account: account ?? null,
-    provider: "xai",
+    provider,
     model: model ?? null,
     operation: operation ?? null,
     duration_ms: durationMs ?? null,
@@ -303,7 +355,58 @@ export function recordImageCall({ account, model, operation, durationMs, imageCo
     cache_creation_tokens: 0,
     web_search_count: 0,
     image_count: count,
-    cost_usd: count * xaiImagePrice(model),
+    // Unknown model and no declared price → cost null, so the dashboard shows
+    // a gap rather than a confident $0.00. Matches the Claude/DeepSeek path.
+    cost_usd: unit === undefined ? null : count * unit,
+    status,
+    error_msg: error ? String(error.message ?? error).slice(0, 500) : null,
+  });
+}
+
+/**
+ * Record one video generation job (Grok Imagine, Veo, Sora, Kling, Runway,
+ * Luma). These price per second of output rather than per asset, so the
+ * billable unit lands in video_seconds and `unitPriceUsd` is $/second.
+ *
+ * `costUsd` wins when the provider reports the exact charge — xAI returns
+ * usage.cost_in_usd_ticks, which beats any rate we hardcode. unitPriceUsd is
+ * the fallback for providers that report only a duration.
+ */
+export function recordVideoCall({
+  account,
+  provider,
+  model,
+  operation,
+  durationMs,
+  seconds = 0,
+  unitPriceUsd,
+  costUsd,
+  status = "ok",
+  error,
+}) {
+  const billable = status === "ok" ? seconds : 0;
+  const resolvedCost =
+    status !== "ok"
+      ? 0
+      : costUsd != null
+        ? costUsd
+        : unitPriceUsd === undefined
+          ? null
+          : billable * unitPriceUsd;
+  safeInsert({
+    account: account ?? null,
+    provider: provider ?? "video",
+    model: model ?? null,
+    operation: operation ?? null,
+    duration_ms: durationMs ?? null,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    web_search_count: 0,
+    image_count: 0,
+    video_seconds: billable,
+    cost_usd: resolvedCost,
     status,
     error_msg: error ? String(error.message ?? error).slice(0, 500) : null,
   });
