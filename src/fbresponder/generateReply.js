@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import { callDeepSeekWithRetry } from "../lib/deepseekClient.js";
+import { callDeepSeekWithRetry, parseDeepSeekJson } from "../lib/deepseekClient.js";
 import { callGeminiVision } from "../lib/geminiClient.js";
 import { fetchImageBase64 } from "./graph.js";
 
@@ -403,10 +403,9 @@ function renderHistory(history) {
   return `Conversation so far:\n${lines.join("\n")}\n\n`;
 }
 
-function parseReplyJson(text) {
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  return JSON.parse(cleaned);
-}
+// Shared with the other DeepSeek json_object call sites — see
+// parseDeepSeekJson for the response quirks it absorbs.
+const parseReplyJson = parseDeepSeekJson;
 
 function finalizeParsed(parsed) {
   console.log(`[fbresponder/generateReply] detected_language: ${parsed.detected_language ?? "(none)"}`);

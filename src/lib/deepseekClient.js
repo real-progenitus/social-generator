@@ -133,3 +133,34 @@ export async function callDeepSeekWithRetry({ attempts = 3, onRetry, ...opts }) 
   }
   throw lastErr;
 }
+
+/**
+ * Parse a JSON object out of a DeepSeek json_object response.
+ *
+ * Two quirks make a bare JSON.parse unreliable, both observed in production:
+ * the model sometimes wraps the object in ``` fences despite being told not
+ * to, and sometimes appends commentary (or a second object) after it, which
+ * fails as "Unexpected non-whitespace character after JSON". So take the first
+ * balanced object rather than trusting the whole string — tracking string and
+ * escape state, so a brace inside a value can't end it early.
+ */
+export function parseDeepSeekJson(text) {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const start = cleaned.indexOf("{");
+  if (start === -1) return JSON.parse(cleaned); // let JSON.parse report it
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (escaped) escaped = false;
+    else if (ch === "\\") escaped = true;
+    else if (ch === '"') inString = !inString;
+    else if (!inString && ch === "{") depth++;
+    else if (!inString && ch === "}" && --depth === 0) return JSON.parse(cleaned.slice(start, i + 1));
+  }
+  // Unbalanced (truncated mid-object) — parse from the opening brace so the
+  // thrown error still points at the real problem.
+  return JSON.parse(cleaned.slice(start));
+}

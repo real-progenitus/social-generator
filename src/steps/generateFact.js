@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { getTopicWeights, recentUsedFacts } from "../db.js";
-import { callDeepSeekWithRetry } from "../lib/deepseekClient.js";
+import { callDeepSeekWithRetry, parseDeepSeekJson } from "../lib/deepseekClient.js";
 import { tavilySearch } from "../lib/tavilySearch.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -457,11 +457,9 @@ async function generateRecentNewsViaTavily(usedList, usedFacts = []) {
   return tagFact(sanitizeFact(parsed), "tavily_news_deepseek");
 }
 
-// JSON mode should return bare JSON, but strip stray code fences defensively.
-function parseFactJson(text) {
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  return JSON.parse(cleaned);
-}
+// Shared with the other DeepSeek json_object call sites — see
+// parseDeepSeekJson for the response quirks it absorbs.
+const parseFactJson = parseDeepSeekJson;
 
 function validateFact(fact) {
   if (!Array.isArray(fact.slides) || fact.slides.length < 4 || fact.slides.length > 6) {

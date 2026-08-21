@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 import { getTopicWeights, recentUsedFacts } from "../db.js";
-import { callDeepSeekWithRetry } from "../lib/deepseekClient.js";
+import { callDeepSeekWithRetry, parseDeepSeekJson } from "../lib/deepseekClient.js";
 
 // Em dashes / double hyphens read as an obvious AI tell — strip them even if
 // the model ignores the system prompt instruction not to use them.
@@ -284,9 +284,7 @@ export async function generateFoodContent() {
       `Already-posted — do NOT repeat or closely paraphrase any of these:\n${usedList}`,
   });
 
-  // json_object mode should return bare JSON; strip stray fences defensively,
-  // same as generateFact.js's parseFactJson.
-  const fact = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
+  const fact = parseDeepSeekJson(text);
 
   if (fact.fact_type === "recipe") {
     if (!fact.ingredients || fact.ingredients.length < 3 || fact.ingredients.length > 10)
