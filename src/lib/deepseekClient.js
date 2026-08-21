@@ -65,6 +65,13 @@ export async function callDeepSeek({ account, operation, system, user, model, js
       throw new Error(
         `DeepSeek API returned no message content (finish_reason=${choice?.finish_reason ?? "unknown"})`,
       );
+    // A truncated answer is worse than an empty one: the caller gets plausible
+    // text that is actually cut off mid-token, so in jsonMode JSON.parse throws
+    // *downstream* of the retry ladder and no retry ever happens. Treating it
+    // as a failure here is what lets callDeepSeekWithRetry see it — and its
+    // last attempt, with reasoning off, has the whole budget for the answer.
+    if (choice.finish_reason === "length")
+      throw new Error("DeepSeek response was truncated before it finished (finish_reason=length)");
 
     recordDeepSeekCall({
       account,

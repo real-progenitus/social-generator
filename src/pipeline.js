@@ -32,13 +32,16 @@ async function loadAccountSteps() {
  * generate_fact (web-search grounded) -> generate_cover_image -> render_slides
  * -> queue_for_review (or publish directly when REVIEW_REQUIRED=false)
  *
- * There is no separate fact-check call: generateFact grounds every claim in a
- * live web search, and the Telegram approval step is the final human gate.
+ * There is no separate fact-check call: the grounded music paths base every
+ * claim on live Tavily results, and the Telegram approval step is the final
+ * human gate.
  */
 export async function runPipeline({ flow } = {}) {
   console.log(`[pipeline] account=${config.account} handle=${config.postHandle}${flow ? ` flow=${flow}` : ""}`);
   if (!config.mockMode) {
-    const required = ["anthropicApiKey"];
+    // DeepSeek writes every account's content since 2026-08-21; Anthropic is
+    // no longer called anywhere in this repo.
+    const required = ["deepseekApiKey"];
     if (!config.localCoverImage) required.push("xaiApiKey");
     requireConfig(required);
   }
@@ -54,9 +57,10 @@ export async function runPipeline({ flow } = {}) {
   updatePost(postId, {
     status: "fact_checked",
     // The music dispatcher tags each fact with the path that produced it
-    // (web_search_grounded | deepseek_knowledge | tavily_news_deepseek); the
-    // food path has no fact_check, so it keeps the default.
-    fact_check_json: JSON.stringify(fact.fact_check ?? { method: "web_search_grounded" }),
+    // (tavily_evergreen_deepseek | deepseek_knowledge | tavily_news_deepseek);
+    // the food path has no fact_check, so it keeps the default — which is
+    // accurate for it, since generateFoodContent.js is knowledge-only.
+    fact_check_json: JSON.stringify(fact.fact_check ?? { method: "deepseek_knowledge" }),
     caption: fact.caption,
   });
   recordUsedFact(fact);

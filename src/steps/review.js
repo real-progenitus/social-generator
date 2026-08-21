@@ -12,13 +12,16 @@ import { publishPost } from "./publish.js";
 const FLOWS = {
   recent_news: "📰 Recent news",
   deepseek: "💸 Evergreen · DeepSeek",
-  claude: "🔍 Evergreen · Claude",
+  grounded: "🔍 Evergreen · Tavily + DeepSeek",
 };
 
 // Human labels for the method tagged onto each fact (fact.fact_check.method),
 // shown in the approval message so you can see which source produced the post.
 const METHOD_LABELS = {
-  web_search_grounded: "🔍 Evergreen · Claude (web search)",
+  // Retired 2026-08-21 with the move off Anthropic, but kept so posts already
+  // in the DB from that era still render a real label instead of a raw key.
+  web_search_grounded: "🔍 Evergreen · Claude (web search, retired)",
+  tavily_evergreen_deepseek: "🔍 Evergreen · Tavily + DeepSeek",
   deepseek_knowledge: "💸 Evergreen · DeepSeek",
   tavily_news_deepseek: "📰 Recent news (Tavily + DeepSeek)",
   mock: "🧪 mock",
@@ -172,7 +175,7 @@ async function handleMessage(msg) {
       inline_keyboard: [
         [{ text: FLOWS.recent_news, callback_data: "gen:recent_news" }],
         [{ text: FLOWS.deepseek, callback_data: "gen:deepseek" }],
-        [{ text: FLOWS.claude, callback_data: "gen:claude" }],
+        [{ text: FLOWS.grounded, callback_data: "gen:grounded" }],
       ],
     },
   });

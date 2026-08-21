@@ -22,14 +22,12 @@ function budget(prefix) {
 }
 
 export const config = {
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
-  claudeModel: process.env.CLAUDE_MODEL ?? "claude-sonnet-5",
-
-  // DeepSeek (OpenAI-compatible, https://api.deepseek.com) — the cheap,
-  // knowledge-only half of the music account's A/B fact generation (see
-  // generateFact.js). deepseekShare is the fraction of *historical*-pillar
-  // posts routed to DeepSeek instead of the Claude+web_search flow; tunable via
-  // env so the split can be dialed without a deploy. NOTE: the deepseek-chat /
+  // DeepSeek (OpenAI-compatible, https://api.deepseek.com) — since 2026-08-21
+  // the only text model this repo calls; every account's generation and the
+  // ifound responder run on it. deepseekShare is the fraction of
+  // *historical*-pillar music posts written from DeepSeek's own knowledge
+  // rather than grounded in a live Tavily search (see generateFact.js);
+  // tunable via env so the split can be dialed without a deploy. NOTE: the deepseek-chat /
   // deepseek-reasoner aliases deprecate 2026-07-24 in favor of
   // deepseek-v4-flash — after that, set DEEPSEEK_MODEL=deepseek-v4-flash.
   deepseekApiKey: process.env.DEEPSEEK_API_KEY ?? "",
@@ -49,14 +47,6 @@ export const config = {
     .map((s) => s.trim())
     .filter(Boolean),
 
-  // Fraction of bitemeweekly posts that get a live Claude web_search (the rest
-  // write from the model's own training knowledge — see generateFoodContent.js).
-  // Healthy recipes and food trivia don't go stale like bass_vault's
-  // recent_news pillar does — there's no "breaking food news" cycle worth
-  // paying Anthropic's $10/1,000-request web_search fee (plus extra
-  // search-result tokens) for. Defaults to 0: all knowledge-only. Tunable via
-  // env without a deploy if that ever changes.
-  foodSearchShare: Number(process.env.FOOD_SEARCH_SHARE ?? 0),
 
   // Google Gemini — vision-only role in this codebase: reading image content
   // (e.g. OCR'ing a flyer's language) for the ifound DM responder, since

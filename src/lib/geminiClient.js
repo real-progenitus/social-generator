@@ -10,7 +10,7 @@ const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 /**
  * @param {object} opts
  * @param {string} opts.account      Account label (unused today, kept for
- *                                    parity with callDeepSeek/callClaude in
+ *                                    parity with callDeepSeek in
  *                                    case this ever gets metered).
  * @param {string} opts.operation    Call-site label.
  * @param {string} opts.imageBase64  Base64-encoded image bytes, no data: URI prefix.

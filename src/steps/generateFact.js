@@ -3,8 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { getTopicWeights, recentUsedFacts } from "../db.js";
-import { callClaude } from "../lib/claudeClient.js";
-import { callDeepSeek } from "../lib/deepseekClient.js";
+import { callDeepSeekWithRetry } from "../lib/deepseekClient.js";
 import { tavilySearch } from "../lib/tavilySearch.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -183,101 +182,6 @@ const MOCK_FACT = {
   cover_subject: "a vintage silver bass synthesizer with small chrome knobs on a dim studio surface",
 };
 
-// Real web search grounds each fact in sources at generation time, which
-// replaces the old separate fact-check call — the generator can only state what
-// it actually found. Supported on claude-sonnet-5 (the configured model).
-// max_uses bumped from 4: the recent_news pillar needs a discovery search
-// (what's trending right now) before it can even settle on a subject to
-// research, the same two-phase search generateFoodContent.js budgets 6 for.
-const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 6 };
-
-/**
- * Claude + live web_search fact generation — the original, most-grounded path,
- * and the fallback when a cheaper path fails. Returns the validated fact
- * (shape of FACT_SCHEMA), tagged with its generation method.
- */
-async function generateFactViaClaude(topic, usedList) {
-  const response = await callClaude({
-    account: config.accountLabel,
-    operation: "generateFact",
-    search: true,
-    model: config.claudeModel,
-    max_tokens: 16000,
-    tools: [WEB_SEARCH_TOOL],
-    system:
-      "You are the researcher-copywriter for an Instagram page that posts one well-sourced electronic music fact per day as a carousel. " +
-      "The page covers five content pillars: performance moments from big names, controversial innovations in music, " +
-      "culture-defining moments, random trivia about big bands/artists, and what's happening right now in the scene, " +
-      "always within electronic music. " +
-      "This account covers electronic music broadly, house and techno included, not just mainstream pop-EDM crossover " +
-      "acts: only feature artists, venues, festivals, and events that a casual electronic music fan would already " +
-      "recognize by name (think Daft Punk, Tomorrowland, Ibiza, Berghain, David Guetta, but equally Jeff Mills, " +
-      "Richie Hawtin, Carl Cox — major names within house/techno culture count too, not just pop chart stars). " +
-      "Avoid true deep-cuts only known within one hyper-niche scene. When a topic seed names a specific act or place, " +
-      "stick to that; otherwise default to the biggest, most widely known name available within its own genre. " +
-      "You have a web_search tool. You MUST search the web before writing, and base every claim strictly on what the " +
-      "sources you find actually say. Do not state specifics (dates, numbers, names, 'firsts', reactions) from memory: " +
-      "verify each against search results, and if the sources don't clearly support a detail, drop it or pick a " +
-      "different fact. Prefer facts corroborated by multiple reputable sources (Wikipedia, Resident Advisor, Mixmag, " +
-      "DJ Mag, Pitchfork, Billboard, official artist or label pages). " +
-      "Keep the post to ONE core, well-established fact; every slide should restate or expand that fact or add " +
-      "widely-known context, not introduce extra shaky specifics. Avoid superlatives and 'first ever' claims unless the " +
-      "sources state them plainly. Do not attribute quotes or reactions to named people unless a source shows it. Do " +
-      "not mischaracterize things (e.g. calling an indie label a 'major label'). " +
-      "In source_note, name the actual sources you verified against (e.g. 'Wikipedia and Resident Advisor coverage'), not a vague claim. " +
-      "Never invent quotes, dates, or chart positions. Write for music fans: concrete, specific, no filler. " +
-      "Never use em dashes or double hyphens (— or --) anywhere in the output; write with periods, commas, colons, or parentheses instead.",
-    messages: [
-      {
-        role: "user",
-        content:
-          (topic.kind === "recent_news"
-            ? `Content pillar: recent_news — ${CONTENT_PILLARS.recent_news}\n\n` +
-              "First, search the web for what's genuinely happening in electronic music right now (the last few " +
-              "weeks): festival lineup or set announcements, viral clips/moments, new releases or collabs making " +
-              "noise, chart shifts, breaking artist news. Do not rely on memory for what's current. Pick the single " +
-              "most compelling story you find.\n\n"
-            : `Topic seed for today: "${topic.topic}"\n` +
-              `Content pillar: ${topic.kind} — ${CONTENT_PILLARS[topic.kind]}\n\n`) +
-          `Search the web to research this topic, then produce one interesting, verifiable fact with carousel copy, matching the content pillar above. Base every claim on the sources you find.\n` +
-          `If the fact is fundamentally about one artist or group, set fact_type to "artist_specific" and fill artist_name; otherwise use "generic" with artist_name null.\n\n` +
-          `Already-posted facts — do NOT repeat or closely paraphrase any of these:\n${usedList}`,
-      },
-    ],
-    output_config: {
-      format: { type: "json_schema", schema: FACT_SCHEMA },
-      effort: "medium",
-    },
-  });
-
-  // With structured output the final answer is one JSON text block; take the
-  // last text block (earlier ones, if any, are intermediate search reasoning).
-  const textBlocks = response.content.filter((b) => b.type === "text");
-  const text = textBlocks[textBlocks.length - 1]?.text;
-  if (!text) throw new Error("Claude returned no text content for fact generation");
-  const fact = JSON.parse(text);
-  // Bucket by pillar, not by the live-discovered story (which is different
-  // every run) — same reasoning as generateFoodContent.js's content-type
-  // bucketing: analytics.js's engagement feedback loop needs a stable key to
-  // nudge, and "recent_news" is that key regardless of which story ran today.
-  if (topic.kind === "recent_news") fact.topic = "recent_news";
-
-  validateFact(fact);
-  return tagFact(sanitizeFact(fact), "web_search_grounded");
-}
-
-// ---------------------------------------------------------------------------
-// DeepSeek paths. Historical pillars can be written from the model's own
-// training knowledge (no live search — far cheaper, and a test of whether the
-// search loop is what manufactures disputed facts). The recent_news pillar
-// can't: DeepSeek's training cutoff means "the last few weeks" must come from a
-// live search, so it's grounded with Tavily results instead. Both emit the
-// FACT_SCHEMA shape via JSON mode — which has no schema enforcement, so the
-// shape is described in the prompt and validated after parse.
-// ---------------------------------------------------------------------------
-
-// Mirror of the persona paragraph in generateFactViaClaude's system prompt —
-// keep the two in sync so both A/B arms target the same voice and scope.
 const PERSONA =
   "You are the researcher-copywriter for an Instagram page that posts one well-sourced electronic music fact per day as a carousel. " +
   "The page covers five content pillars: performance moments from big names, controversial innovations in music, " +
@@ -290,8 +194,8 @@ const PERSONA =
   "Avoid true deep-cuts only known within one hyper-niche scene. When a topic seed names a specific act or place, " +
   "stick to that; otherwise default to the biggest, most widely known name available within its own genre. ";
 
-// Shared closing rules for the DeepSeek arms — equivalent to the Claude arm's,
-// minus the web_search-specific verification language.
+// Shared closing rules for all three DeepSeek arms (knowledge, grounded,
+// news). The per-arm grounding contract lives in each arm's own rules block.
 const WRITING_RULES =
   "Keep the post to ONE core, well-established fact; every slide should restate or expand that fact or add " +
   "widely-known context, not introduce extra shaky specifics. Avoid superlatives and 'first ever' claims unless they " +
@@ -331,9 +235,11 @@ const DEEPSEEK_KNOWLEDGE_RULES =
  * live search. Returns the validated, method-tagged fact.
  */
 async function generateFactViaDeepSeek(topic, usedList, note) {
-  const text = await callDeepSeek({
+  const text = await callDeepSeekWithRetry({
     account: config.accountLabel,
     operation: "generateFact",
+    onRetry: (err, attempt) =>
+      console.warn(`[generateFact] DeepSeek attempt ${attempt} failed (${err.message}); retrying`),
     model: config.deepseekModel,
     jsonMode: true,
     maxTokens: 4000,
@@ -349,6 +255,65 @@ async function generateFactViaDeepSeek(topic, usedList, note) {
   const fact = parseFactJson(text);
   validateFact(fact);
   return tagFact(sanitizeFact(fact), "deepseek_knowledge", note);
+}
+
+const DEEPSEEK_GROUNDED_RULES =
+  "You are given the results of a live web search about the topic seed below. Base every claim strictly on what " +
+  "these search results actually say. Do not state specifics (dates, numbers, names, chart positions, 'firsts', " +
+  "reactions) from memory: verify each against the results, and if they do not clearly support a detail, drop it " +
+  "or choose a different angle that they do support. Prefer claims corroborated by more than one result. In " +
+  "source_note, name the kind of sources this is grounded in (e.g. 'Wikipedia and Resident Advisor coverage'), " +
+  'not a URL. If the results are too thin or off-topic to support one solid fact, respond with EXACTLY ' +
+  '{"insufficient_sources": true} and nothing else. ';
+
+/**
+ * Evergreen fact grounded in a live Tavily search on the topic seed, written by
+ * DeepSeek. Replaces the Claude + web_search path retired 2026-08-21 when the
+ * account moved off Anthropic: the same "verify before you write" contract, but
+ * the search hop is Tavily and the writing hop is DeepSeek. Throws when the
+ * search is too thin to ground a fact, so the caller can drop to the knowledge
+ * path rather than publish something unsupported.
+ */
+async function generateEvergreenViaTavily(topic, usedList) {
+  const { answer, results } = await tavilySearch({
+    account: config.accountLabel,
+    operation: "evergreenSearch",
+    // The seeds in data/topics.json are already specific enough to search
+    // verbatim ("Daft Punk's 2006 Coachella pyramid stage debut").
+    query: topic.topic,
+    // "general", not "news": these pillars are historical, so the recent_news
+    // path's 14-day recency window would return nothing for them.
+    topic: "general",
+    maxResults: 8,
+  });
+  if (results.length === 0) throw new Error("no search results for topic seed");
+
+  const sources =
+    (answer ? `Search summary: ${answer}\n\n` : "") +
+    results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`).join("\n\n");
+
+  const text = await callDeepSeekWithRetry({
+    account: config.accountLabel,
+    operation: "generateFact",
+    model: config.deepseekModel,
+    jsonMode: true,
+    maxTokens: 4000,
+    onRetry: (err, attempt) =>
+      console.warn(`[generateFact] grounded DeepSeek attempt ${attempt} failed (${err.message}); retrying`),
+    system: PERSONA + DEEPSEEK_GROUNDED_RULES + WRITING_RULES + JSON_SHAPE_INSTRUCTION,
+    user:
+      `Topic seed for today: "${topic.topic}"\n` +
+      `Content pillar: ${topic.kind} — ${CONTENT_PILLARS[topic.kind]}\n\n` +
+      `Live search results about this topic:\n${sources}\n\n` +
+      "Produce one interesting, well-supported fact with carousel copy, matching the content pillar above.\n" +
+      'If the fact is fundamentally about one artist or group, set fact_type to "artist_specific" and fill artist_name; otherwise use "generic" with artist_name null.\n\n' +
+      `Already-posted facts, do NOT repeat or closely paraphrase any of these:\n${usedList}`,
+  });
+
+  const fact = parseFactJson(text);
+  if (fact.insufficient_sources) throw new Error("search results too thin to ground a fact");
+  validateFact(fact);
+  return tagFact(sanitizeFact(fact), "tavily_evergreen_deepseek");
 }
 
 const DEEPSEEK_NEWS_RULES =
@@ -463,9 +428,11 @@ async function generateRecentNewsViaTavily(usedList, usedFacts = []) {
     (answer ? `Search summary: ${answer}\n\n` : "") +
     results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`).join("\n\n");
 
-  const text = await callDeepSeek({
+  const text = await callDeepSeekWithRetry({
     account: config.accountLabel,
     operation: "generateFact",
+    onRetry: (err, attempt) =>
+      console.warn(`[generateFact] DeepSeek attempt ${attempt} failed (${err.message}); retrying`),
     model: config.deepseekModel,
     jsonMode: true,
     maxTokens: 4000,
@@ -482,7 +449,7 @@ async function generateRecentNewsViaTavily(usedList, usedFacts = []) {
 
   const parsed = parseFactJson(text);
   if (parsed.no_fresh_story || looksLikeNoNews(parsed)) throw new NoFreshNews();
-  parsed.topic = "recent_news"; // stable pillar key for analytics, as in the Claude path
+  parsed.topic = "recent_news"; // stable pillar key for analytics, not the search query used
   validateFact(parsed);
   // Deterministic backstop: if DeepSeek re-picked an already-covered subject
   // despite the instruction, treat it as no-fresh-news.
@@ -514,13 +481,16 @@ function tagFact(fact, method, note) {
 
 /**
  * Music-account content entry point. `flow` (from the Telegram /generate picker)
- * forces a path; omitted/"auto" uses the default A/B dispatch:
- *   - recent_news  → always Tavily+DeepSeek
+ * forces a path; omitted/"auto" uses the default dispatch:
+ *   - recent_news  → always Tavily news + DeepSeek
  *   - "deepseek"   → DeepSeek knowledge on a historical pillar
- *   - "claude"     → Claude web_search on a historical pillar
+ *   - "grounded"   → Tavily search + DeepSeek on a historical pillar
  *   - auto         → recent_news→Tavily; historical split by config.deepseekShare
- * The DeepSeek/Tavily paths fall back to Claude on any error, so a run never
- * fails to produce a post.
+ *
+ * Every searched path falls back to the knowledge path, which depends on no
+ * external service and so is the one that is always available, so a run never
+ * fails to produce a post. Nothing here touches Anthropic any more: the Claude
+ * web_search arm was retired 2026-08-21 in favour of "grounded" above.
  */
 export async function generateFact({ flow } = {}) {
   if (config.mockMode) {
@@ -534,20 +504,22 @@ export async function generateFact({ flow } = {}) {
       ? used.map((f) => `- ${f.headline}${f.artist_name ? ` (${f.artist_name})` : ""}`).join("\n")
       : "(none yet)";
 
-  // Fall back to the (always-available) Claude web_search path if a cheaper
-  // path throws; `topic` is what that fallback should research.
-  const withClaudeFallback = async (topic, label, fn) => {
+  // Drop to the knowledge path when a searched path throws. That path needs no
+  // external service, and is itself retry-laddered inside callDeepSeekWithRetry,
+  // so this is a fallback between *strategies* rather than a retry of the same
+  // call. `topic` is what the fallback should write about.
+  const withKnowledgeFallback = async (topic, label, fn) => {
     try {
       return await fn();
     } catch (err) {
-      console.warn(`[generateFact] ${label} failed (${err.message}); falling back to Claude web_search`);
-      return generateFactViaClaude(topic, usedList);
+      console.warn(`[generateFact] ${label} failed (${err.message}); falling back to DeepSeek knowledge`);
+      return generateFactViaDeepSeek(topic, usedList);
     }
   };
 
-  // recent_news, with a graceful fallback: no fresh on-genre story => an
-  // evergreen DeepSeek fact (tagged so the approval message says so); a hard
-  // Tavily/DeepSeek failure => the always-available Claude web_search path.
+  // recent_news, with a graceful fallback: no fresh on-genre story (or a hard
+  // Tavily/DeepSeek failure) => an evergreen knowledge fact, tagged with a note
+  // so the Telegram approval message says which it got and why.
   const recentNews = async () => {
     try {
       return await generateRecentNewsViaTavily(usedList, used);
@@ -558,36 +530,38 @@ export async function generateFact({ flow } = {}) {
           : "recent-news generation failed — evergreen fact";
       console.warn(`[generateFact] recent_news (${err.message}); evergreen DeepSeek fallback`);
       const t = pickTopic({ excludeRecentNews: true });
-      return withClaudeFallback(t, "evergreen DeepSeek (news fallback)", () =>
-        generateFactViaDeepSeek(t, usedList, note),
-      );
+      return generateFactViaDeepSeek(t, usedList, note);
     }
   };
 
-  // Explicit flow from the Telegram picker overrides the A/B split.
+  // Explicit flow from the Telegram picker overrides the default split.
   if (flow === "recent_news") {
     return recentNews();
   }
   if (flow === "deepseek") {
     const topic = pickTopic({ excludeRecentNews: true });
-    console.log(`[generateFact] forced DeepSeek (${config.deepseekModel}) for "${topic.topic}"`);
-    return withClaudeFallback(topic, "DeepSeek knowledge path", () => generateFactViaDeepSeek(topic, usedList));
+    console.log(`[generateFact] forced DeepSeek knowledge (${config.deepseekModel}) for "${topic.topic}"`);
+    return generateFactViaDeepSeek(topic, usedList);
   }
-  if (flow === "claude") {
+  if (flow === "grounded") {
     const topic = pickTopic({ excludeRecentNews: true });
-    console.log(`[generateFact] forced Claude web_search for "${topic.topic}"`);
-    return generateFactViaClaude(topic, usedList);
+    console.log(`[generateFact] forced Tavily-grounded DeepSeek for "${topic.topic}"`);
+    return withKnowledgeFallback(topic, "Tavily-grounded evergreen", () =>
+      generateEvergreenViaTavily(topic, usedList),
+    );
   }
 
-  // Default: auto A/B dispatch.
+  // Default: auto dispatch.
   const topic = pickTopic();
   if (topic.kind === "recent_news") {
     return recentNews();
   }
   if (Math.random() < config.deepseekShare) {
-    console.log(`[generateFact] routing "${topic.topic}" to DeepSeek (${config.deepseekModel})`);
-    return withClaudeFallback(topic, "DeepSeek knowledge path", () => generateFactViaDeepSeek(topic, usedList));
+    console.log(`[generateFact] routing "${topic.topic}" to DeepSeek knowledge`);
+    return generateFactViaDeepSeek(topic, usedList);
   }
-  console.log(`[generateFact] routing "${topic.topic}" to Claude web_search`);
-  return generateFactViaClaude(topic, usedList);
+  console.log(`[generateFact] routing "${topic.topic}" to Tavily-grounded DeepSeek`);
+  return withKnowledgeFallback(topic, "Tavily-grounded evergreen", () =>
+    generateEvergreenViaTavily(topic, usedList),
+  );
 }

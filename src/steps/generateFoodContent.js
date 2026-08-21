@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 import { getTopicWeights, recentUsedFacts } from "../db.js";
-import { callClaude } from "../lib/claudeClient.js";
+import { callDeepSeekWithRetry } from "../lib/deepseekClient.js";
 
 // Em dashes / double hyphens read as an obvious AI tell — strip them even if
 // the model ignores the system prompt instruction not to use them.
@@ -51,9 +51,8 @@ const RECIPE_SCHEMA = {
     trend_source: {
       type: "string",
       description:
-        "One sentence for the human reviewer on why this pick works right now: cite what your search results show " +
-        "is trending if you searched, or why it's a reliably popular choice if you're writing from memory. Not shown " +
-        "on the slides.",
+        "One sentence for the human reviewer on why this pick works: what makes it a reliably popular, well-loved " +
+        "choice. Not shown on the slides.",
     },
     servings: { type: "string", description: "e.g. '2 servings'" },
     prep_time: { type: "string", description: "e.g. '10 min'" },
@@ -112,8 +111,8 @@ const TRIVIA_SCHEMA = {
     trend_source: {
       type: "string",
       description:
-        "One sentence for the human reviewer on what makes this timely if you searched, or why it's a reliably " +
-        "well-loved fact if you're writing from memory. Not shown on-slide.",
+        "One sentence for the human reviewer on why this is a reliably well-loved, well-documented fact. " +
+        "Not shown on-slide.",
     },
     slides: {
       type: "array",
@@ -196,10 +195,8 @@ const MOCK_TRIVIA = {
   caption: "Kimchi went red less than 300 years ago. 🌶️ #kimchi #fermentedfoods #foodhistory #guthealth #koreanfood #probiotics",
 };
 
-const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 6 };
-
-// Shared across both arms below — the writing rules don't depend on whether
-// the pick came from a live search or the model's own knowledge.
+// Applies to both content types — the writing rules don't depend on whether
+// the post is a recipe or a trivia fact.
 const FOOD_WRITING_RULES =
   "For a RECIPE post: keep it realistically healthy — whole-food ingredients, balanced macronutrients, no fad-diet " +
   "or medical claims ('cures', 'treats', 'detoxes'). Write the ingredient list and steps in your own words and your " +
@@ -212,18 +209,10 @@ const FOOD_WRITING_RULES =
   "punchy rather than exhaustive — a tight 3-4 slide read outperforms a long one. Never use em dashes or double " +
   "hyphens (— or --) anywhere in the output; use periods, commas, colons, or parentheses instead.";
 
-const FOOD_SYSTEM_PROMPT_SEARCH =
-  "You are the recipe developer and food-trivia writer for a health-conscious Instagram foodie page. You have a " +
-  "web_search tool. Before writing anything, search the web to find what's genuinely trending right now in healthy " +
-  "eating and food culture — do not rely on memory or produce something generic; the entire point of this search is " +
-  "to catch what's hot today for maximum engagement. For a TRIVIA post, prefer reputable sources (established food " +
-  "publications, registered-dietitian or nutrition-science sources, major news outlets, primary food-history " +
-  "references) over random blogs.\n\n" + FOOD_WRITING_RULES;
-
-// Knowledge-only arm: no tool call, no per-request web_search fee, and no
-// extra search-result tokens. Healthy recipes and food trivia are mostly
-// evergreen (unlike bass_vault's recent_news pillar), so most runs don't need
-// same-day freshness — see config.foodSearchShare for the split.
+// The only arm since 2026-08-21. Healthy recipes and food trivia are mostly
+// evergreen (unlike bass_vault's recent_news pillar), so nothing here needs
+// same-day freshness — which is why the old FOOD_SEARCH_SHARE web-search arm
+// was dropped with the move off Claude rather than rebuilt on Tavily.
 const FOOD_SYSTEM_PROMPT_KNOWLEDGE =
   "You are the recipe developer and food-trivia writer for a health-conscious Instagram foodie page. Write from your " +
   "own well-established knowledge of healthy eating and food culture: a reliably popular recipe style or a widely " +
@@ -232,13 +221,29 @@ const FOOD_SYSTEM_PROMPT_KNOWLEDGE =
   "If you're not confident a specific claim (a date, a number, a 'first') is well established, soften it or drop it " +
   "rather than guessing.\n\n" + FOOD_WRITING_RULES;
 
+// DeepSeek's json_object mode has no schema enforcement, so the shape has to be
+// spelled out in the prompt. Rendering it from the same schema object keeps the
+// two from drifting: generateFact.js hand-writes its equivalent, which is fine
+// for one fixed shape but would mean maintaining two long parallel strings here
+// (recipe and trivia). The word "json" must appear for response_format to work.
+function schemaShapeInstruction(schema) {
+  const lines = Object.entries(schema.properties).map(([key, spec]) => {
+    const fixed = spec.enum ? ` (exactly "${spec.enum[0]}")` : "";
+    const arr = spec.type === "array" ? " (array of strings)" : "";
+    return `- ${key}${fixed}${arr}: ${spec.description ?? ""}`.trimEnd();
+  });
+  return (
+    "\n\nRespond with a single valid json object and nothing else (no markdown, no code " +
+    `fences), with exactly these keys:\n${lines.join("\n")}`
+  );
+}
+
 /**
  * Generate one food post — either a healthy recipe or a food-trivia fact —
- * via the Claude API, no fixed topic seed list. A config.foodSearchShare
- * fraction of runs ground in a live web search for what's currently trending;
- * the rest write from the model's own training knowledge (cheaper, and fine
- * for content this evergreen — see FOOD_SYSTEM_PROMPT_KNOWLEDGE). Returns the
- * validated content object (shape of RECIPE_SCHEMA or TRIVIA_SCHEMA).
+ * from DeepSeek's own knowledge, with no fixed topic seed list and no live
+ * search (see FOOD_SYSTEM_PROMPT_KNOWLEDGE for why this content doesn't need
+ * one). Returns the validated content object (shape of RECIPE_SCHEMA or
+ * TRIVIA_SCHEMA).
  */
 export async function generateFoodContent() {
   if (config.mockMode) {
@@ -255,44 +260,33 @@ export async function generateFoodContent() {
 
   const schema = contentType === "recipe" ? RECIPE_SCHEMA : TRIVIA_SCHEMA;
 
-  const useSearch = Math.random() < config.foodSearchShare;
-  console.log(
-    `[generateFoodContent] routing to ${useSearch ? "Claude web_search" : "Claude knowledge-only"} (${contentType})`,
-  );
+  console.log(`[generateFoodContent] routing to DeepSeek knowledge-only (${contentType})`);
 
   const postPrompt =
     contentType === "recipe" ? "Produce one original, healthy recipe post." : "Produce one surprising, well-sourced food trivia post.";
-  const groundingPrompt = useSearch
-    ? "\n\nFirst, search the web for what's genuinely trending right now in healthy eating / food content " +
-      "(viral recipes, seasonal ingredients, food news, nutrition trends across food media and social platforms) " +
-      "— do not rely on memory for what's currently popular.\n\n"
-    : "\n\nDraw on your own well-established knowledge — no need to search, and no need for this to be tied to " +
-      "what's trending this particular week.\n\n";
 
-  const response = await callClaude({
+  const text = await callDeepSeekWithRetry({
     account: config.accountLabel,
     operation: "generateFoodContent",
-    search: useSearch,
-    model: config.claudeModel,
-    max_tokens: 16000,
-    ...(useSearch ? { tools: [WEB_SEARCH_TOOL] } : {}),
-    system: useSearch ? FOOD_SYSTEM_PROMPT_SEARCH : FOOD_SYSTEM_PROMPT_KNOWLEDGE,
-    messages: [
-      {
-        role: "user",
-        content: postPrompt + groundingPrompt + `Already-posted — do NOT repeat or closely paraphrase any of these:\n${usedList}`,
-      },
-    ],
-    output_config: {
-      format: { type: "json_schema", schema },
-      effort: "medium",
-    },
+    model: config.deepseekModel,
+    jsonMode: true,
+    onRetry: (err, attempt) =>
+      console.warn(`[generateFoodContent] DeepSeek attempt ${attempt} failed (${err.message}); retrying`),
+    // A full recipe (10 ingredients, 8 steps, caption) is a long JSON object,
+    // and reasoning_content is drawn from this same budget before any of it is
+    // written — see generateReply.js's call for the failure this avoids.
+    maxTokens: 8000,
+    system: FOOD_SYSTEM_PROMPT_KNOWLEDGE + schemaShapeInstruction(schema),
+    user:
+      postPrompt +
+      "\n\nDraw on your own well-established knowledge — no need for this to be tied to what's trending this " +
+      "particular week.\n\n" +
+      `Already-posted — do NOT repeat or closely paraphrase any of these:\n${usedList}`,
   });
 
-  const textBlocks = response.content.filter((b) => b.type === "text");
-  const text = textBlocks[textBlocks.length - 1]?.text;
-  if (!text) throw new Error("Claude returned no text content for food content generation");
-  const fact = JSON.parse(text);
+  // json_object mode should return bare JSON; strip stray fences defensively,
+  // same as generateFact.js's parseFactJson.
+  const fact = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
 
   if (fact.fact_type === "recipe") {
     if (!fact.ingredients || fact.ingredients.length < 3 || fact.ingredients.length > 10)
